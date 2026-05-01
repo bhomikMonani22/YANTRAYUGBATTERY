@@ -139,8 +139,25 @@
   .tab-inactive { background: transparent; color:#1A1A1A; }
   .tab-inactive:hover { background: rgba(10,10,10,0.04); }
 
-  /* ====== Searchable dropdown ====== */
+  /* Searchable dropdown — mobile bottom-sheet treatment */
   .dd-pop { box-shadow: 0 8px 28px -8px rgba(10,10,10,0.20), 0 0 0 1px rgba(10,10,10,0.06); }
+  .dd-pop.dd-mobile {
+    position: fixed !important;
+    left: 12px !important;
+    right: 12px !important;
+    top: 12px !important;
+    width: auto !important;
+    max-height: 70vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .dd-pop.dd-mobile #dd-list { max-height: none; flex: 1; }
+  #dd-backdrop {
+    position: fixed; inset: 0; background: rgba(10,10,10,0.35);
+    backdrop-filter: blur(2px); z-index: 49;
+  }
+  @keyframes sheetin { from { opacity: 0; transform: translateY(-8px); } to { opacity:1; transform: translateY(0); } }
+  .dd-pop.dd-mobile { animation: sheetin .22s ease-out; }
 
   /* New entry highlight */
   @keyframes flashin { 0% { background:#E6DCFF; } 100% { background: #FAF7F1; } }
@@ -494,7 +511,8 @@
               <th class="text-left px-3 py-3 font-medium">Type</th>
               <th class="text-left px-3 py-3 font-medium">Party</th>
               <th class="text-left px-3 py-3 font-medium">Driver</th>
-              <th class="text-left px-3 sm:px-8 py-3 font-medium whitespace-nowrap">When</th>
+              <th class="text-left px-3 py-3 font-medium whitespace-nowrap">When</th>
+              <th class="text-right px-3 sm:px-8 py-3 font-medium"></th>
             </tr>
           </thead>
           <tbody id="w-table" class="divide-y divide-cream-deep/40"></tbody>
@@ -568,10 +586,66 @@
 <!-- ============ TOAST ============ -->
 <div id="toast-host" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2 pointer-events-none"></div>
 
+<!-- ============ EDIT MODAL ============ -->
+<div id="edit-backdrop" class="hidden fixed inset-0 z-50" style="background:rgba(10,10,10,0.45);backdrop-filter:blur(3px);"></div>
+<div id="edit-modal" class="hidden fixed z-50 inset-x-3 top-3 sm:inset-x-auto sm:top-1/2 sm:left-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:w-[560px] sm:max-w-[92vw] bg-white rounded-2xl border border-cream-deep shadow-lift overflow-hidden flex flex-col" style="max-height:94vh;">
+  <div class="px-5 sm:px-6 py-4 border-b border-cream-deep/60 flex items-center justify-between bg-white">
+    <div>
+      <h3 class="text-[15px] font-semibold tracking-tight">Edit intake</h3>
+      <p class="text-[12px] text-ink-mute mt-0.5" id="edit-meta">—</p>
+    </div>
+    <button id="edit-close" class="p-2 rounded-lg hover:bg-cream-dark text-ink-mute" aria-label="Close">
+      <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M6 18L18 6"/></svg>
+    </button>
+  </div>
+  <form id="edit-form" class="p-5 sm:p-6 space-y-4 overflow-y-auto">
+    <input type="hidden" id="e-id" />
+    <div>
+      <label class="text-[11px] uppercase tracking-wider text-ink-mute font-medium">Serial number</label>
+      <input id="e-serial" type="text" required
+        class="mt-1.5 w-full px-3.5 py-2.5 rounded-lg border border-cream-deep bg-cream/40 focus:bg-white focus:border-ink-soft focus:outline-none transition text-[14px] font-mono" />
+    </div>
+    <div class="dd-wrap relative" data-dd="e-type">
+      <label class="text-[11px] uppercase tracking-wider text-ink-mute font-medium">Battery type</label>
+      <button type="button" class="dd-trigger mt-1.5 w-full text-left px-3.5 py-2.5 rounded-lg border border-cream-deep bg-cream/40 hover:bg-white transition text-[14px] flex items-center justify-between">
+        <span class="dd-label text-ink-mute">Select battery type</span>
+        <svg class="w-4 h-4 text-ink-mute" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 8l4 4 4-4"/></svg>
+      </button>
+    </div>
+    <div class="dd-wrap relative" data-dd="e-party">
+      <label class="text-[11px] uppercase tracking-wider text-ink-mute font-medium">Party</label>
+      <button type="button" class="dd-trigger mt-1.5 w-full text-left px-3.5 py-2.5 rounded-lg border border-cream-deep bg-cream/40 hover:bg-white transition text-[14px] flex items-center justify-between">
+        <span class="dd-label text-ink-mute">Select party</span>
+        <svg class="w-4 h-4 text-ink-mute" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 8l4 4 4-4"/></svg>
+      </button>
+    </div>
+    <div>
+      <label class="text-[11px] uppercase tracking-wider text-ink-mute font-medium">Driver</label>
+      <input id="e-driver" type="text" required
+        class="mt-1.5 w-full px-3.5 py-2.5 rounded-lg border border-cream-deep bg-cream/40 focus:bg-white focus:border-ink-soft focus:outline-none transition text-[14px]" />
+    </div>
+    <div>
+      <label class="text-[11px] uppercase tracking-wider text-ink-mute font-medium">Notes</label>
+      <textarea id="e-notes" rows="2" class="mt-1.5 w-full px-3.5 py-2.5 rounded-lg border border-cream-deep bg-cream/40 focus:bg-white focus:border-ink-soft focus:outline-none transition text-[14px] resize-none"></textarea>
+    </div>
+  </form>
+  <div class="px-5 sm:px-6 py-4 border-t border-cream-deep/60 bg-cream/30 flex items-center gap-3">
+    <button id="edit-cancel" class="px-4 py-2.5 rounded-lg border border-cream-deep bg-white text-[13.5px] font-medium hover:bg-cream-dark transition">Cancel</button>
+    <button id="edit-save" class="ml-auto inline-flex items-center gap-2 bg-ink text-cream px-5 py-2.5 rounded-lg text-[13.5px] font-medium hover:bg-ink-soft transition">
+      <span id="edit-save-label">Save changes</span>
+    </button>
+  </div>
+</div>
+
 <!-- ============ DROPDOWN POP TEMPLATE ============ -->
+<div id="dd-backdrop" class="hidden"></div>
 <div id="dd-pop" class="hidden fixed z-50 dd-pop bg-white rounded-xl border border-cream-deep overflow-hidden" style="min-width:280px;">
-  <div class="p-2 border-b border-cream-deep/60">
-    <input id="dd-search" type="text" placeholder="Search…" class="w-full px-3 py-2 rounded-lg bg-cream-dark/60 border-0 focus:outline-none focus:bg-white focus:ring-1 focus:ring-ink-soft text-[14px]" />
+  <div class="p-2 border-b border-cream-deep/60 flex items-center gap-2 bg-white">
+    <input id="dd-search" type="text" placeholder="Search…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+      class="flex-1 px-3 py-2.5 rounded-lg bg-cream-dark/60 border-0 focus:outline-none focus:bg-white focus:ring-1 focus:ring-ink-soft text-[14px]" />
+    <button id="dd-close" type="button" class="sm:hidden p-2 rounded-lg hover:bg-cream-dark text-ink-mute">
+      <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M6 18L18 6"/></svg>
+    </button>
   </div>
   <div id="dd-list" class="dd-scroll max-h-72 overflow-y-auto py-1.5"></div>
 </div>
@@ -590,7 +664,7 @@ const SUPA_ANON = 'sb_publishable_L7QYt5YnYHWGbIr_o79t9w_5wVMuzSv';
 const TABLE = 'battery_returns';
 
 const DRIVERS = [
-  'GORE', 'SUTKAR', 'Sahil', 'Kapre', 'rauff', 'Shekar'
+  'Abjit', 'Ramesh', 'Sandip', 'Ganesh', 'Vikas', 'Rahul'
 ]; // edit these to match your actual drivers
 
 const supa = window.supabase.createClient(SUPA_URL, SUPA_ANON);
@@ -705,26 +779,43 @@ function openDD(triggerEl, items, current, onSelect) {
   DD.open = triggerEl; DD.items = items; DD.onSelect = onSelect; DD.value = current;
 
   const pop = document.getElementById('dd-pop');
+  const backdrop = document.getElementById('dd-backdrop');
   const search = document.getElementById('dd-search');
   search.value = '';
   pop.classList.remove('hidden');
 
-  const r = triggerEl.getBoundingClientRect();
-  const popWidth = Math.max(280, r.width);
-  pop.style.width = popWidth + 'px';
-  // Position below trigger; flip up if would overflow viewport
-  let top = r.bottom + 6;
-  let left = r.left;
-  if (left + popWidth > window.innerWidth - 8) left = window.innerWidth - popWidth - 8;
-  if (left < 8) left = 8;
-  pop.style.left = left + 'px';
-  pop.style.top  = top + 'px';
+  const isMobile = window.innerWidth < 640;
+  if (isMobile) {
+    // Bottom sheet style — full width, anchored near top so keyboard doesn't shove it off-screen
+    pop.classList.add('dd-mobile');
+    pop.style.left = '';
+    pop.style.right = '';
+    pop.style.top = '';
+    pop.style.width = '';
+    backdrop.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+  } else {
+    pop.classList.remove('dd-mobile');
+    const r = triggerEl.getBoundingClientRect();
+    const popWidth = Math.max(280, r.width);
+    pop.style.width = popWidth + 'px';
+    let top = r.bottom + 6;
+    let left = r.left;
+    if (left + popWidth > window.innerWidth - 8) left = window.innerWidth - popWidth - 8;
+    if (left < 8) left = 8;
+    pop.style.left = left + 'px';
+    pop.style.top  = top + 'px';
+  }
 
   renderDDList(items);
-  search.focus();
+  // Auto-focus only on desktop — on mobile, let the user tap to open the keyboard
+  // when they're ready (avoids races with the in-flight tap event).
+  if (!isMobile) search.focus();
 }
 function closeDD() {
   document.getElementById('dd-pop').classList.add('hidden');
+  document.getElementById('dd-backdrop').classList.add('hidden');
+  document.body.style.overflow = '';
   DD.open = null;
 }
 function renderDDList(items) {
@@ -735,7 +826,7 @@ function renderDDList(items) {
   }
   list.innerHTML = items.slice(0, 200).map(it => `
     <button type="button" data-val="${escapeHtml(it)}"
-      class="dd-item w-full text-left px-3.5 py-2 hover:bg-lav-50 text-[14px] flex items-center justify-between gap-3 transition">
+      class="dd-item w-full text-left px-3.5 py-3 sm:py-2 hover:bg-lav-50 active:bg-lav-100 text-[14px] flex items-center justify-between gap-3 transition">
       <span class="truncate">${escapeHtml(it)}</span>
       ${it === DD.value ? '<svg class="w-4 h-4 text-lav-700 flex-shrink-0" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 10l3 3 7-7"/></svg>' : ''}
     </button>
@@ -759,8 +850,11 @@ document.addEventListener('click', e => {
   if (pop.contains(e.target) || DD.open.contains(e.target)) return;
   closeDD();
 });
-window.addEventListener('resize', closeDD);
-window.addEventListener('scroll', closeDD, true);
+document.getElementById('dd-close').addEventListener('click', closeDD);
+document.getElementById('dd-backdrop').addEventListener('click', closeDD);
+// NOTE: intentionally NOT closing on resize or scroll. On mobile, the soft
+// keyboard appearing fires a resize event, which would close the dropdown
+// the user just opened. Click-outside is enough.
 
 function bindDD(scope, items, onPick) {
   const trig = scope.querySelector('.dd-trigger');
@@ -782,10 +876,16 @@ function setDD(scope, val) {
   lbl.classList.remove('text-ink-mute'); lbl.classList.add('text-ink');
 }
 
-const ddType  = document.querySelector('[data-dd="type"]');
-const ddParty = document.querySelector('[data-dd="party"]');
+const ddType  = document.querySelector('#intake-form [data-dd="type"]');
+const ddParty = document.querySelector('#intake-form [data-dd="party"]');
 bindDD(ddType,  BATTERY_TYPES);
 bindDD(ddParty, PARTIES);
+
+// Edit modal dropdowns
+const ddETYpe  = document.querySelector('[data-dd="e-type"]');
+const ddEParty = document.querySelector('[data-dd="e-party"]');
+bindDD(ddETYpe,  BATTERY_TYPES);
+bindDD(ddEParty, PARTIES);
 
 /* ============================================================
  *  DRIVER CHIPS
@@ -973,16 +1073,21 @@ async function loadFeed(highlightId=null) {
     return;
   }
   list.innerHTML = data.map(r => `
-    <div class="px-5 sm:px-6 py-3.5 grid grid-cols-12 gap-3 items-center ${r.id===highlightId?'flashin':''}">
+    <div class="px-5 sm:px-6 py-3.5 grid grid-cols-12 gap-3 items-center group ${r.id===highlightId?'flashin':''}">
       <div class="col-span-12 sm:col-span-4">
         <div class="font-mono text-[12.5px] truncate">${escapeHtml(r.serial_number)}</div>
         <div class="text-[11px] text-ink-mute mt-0.5">${escapeHtml(r.battery_type)}</div>
       </div>
-      <div class="col-span-7 sm:col-span-5 text-[13px] truncate">${escapeHtml(r.party_name)}</div>
+      <div class="col-span-7 sm:col-span-4 text-[13px] truncate">${escapeHtml(r.party_name)}</div>
       <div class="col-span-3 sm:col-span-2">
         <span class="inline-block px-2 py-0.5 bg-lav-50 text-lav-700 rounded-full text-[11px] font-medium">${escapeHtml(r.driver_name)}</span>
       </div>
-      <div class="col-span-2 sm:col-span-1 text-right text-[11px] font-mono text-ink-faint whitespace-nowrap">${timeAgo(r.created_at)}</div>
+      <div class="col-span-2 sm:col-span-2 flex items-center justify-end gap-2">
+        <span class="text-[11px] font-mono text-ink-faint whitespace-nowrap">${timeAgo(r.created_at)}</span>
+        <button data-edit-id="${escapeHtml(r.id)}" class="p-1.5 rounded-md hover:bg-cream-dark text-ink-mute hover:text-ink transition" aria-label="Edit">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 3l3 3-9 9H5v-3l9-9zM12 5l3 3"/></svg>
+        </button>
+      </div>
     </div>
   `).join('');
 }
@@ -1031,6 +1136,10 @@ async function runLookup() {
       <div class="flex items-center gap-2 mb-4">
         <span class="w-1.5 h-1.5 rounded-full bg-mint-500 live-dot"></span>
         <span class="text-[11px] font-semibold text-lav-700 uppercase tracking-wider">Match found</span>
+        <button data-edit-id="${escapeHtml(r.id)}" class="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white border border-lav-100 hover:bg-lav-50 transition text-[12px] font-medium text-ink-soft">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 3l3 3-9 9H5v-3l9-9zM12 5l3 3"/></svg>
+          Edit
+        </button>
       </div>
       <div class="grid sm:grid-cols-2 gap-x-8 gap-y-5">
         <div>
@@ -1076,6 +1185,9 @@ async function runLookup() {
             <span class="font-mono text-[12.5px]">${escapeHtml(o.serial_number)}</span>
             <span class="text-ink-mute">${escapeHtml(o.battery_type)}</span>
             <span class="ml-auto text-ink-mute">${escapeHtml(o.driver_name)} · ${escapeHtml(timeAgo(o.created_at))}</span>
+            <button data-edit-id="${escapeHtml(o.id)}" class="p-1.5 rounded-md hover:bg-cream-dark text-ink-mute hover:text-ink transition" aria-label="Edit">
+              <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 3l3 3-9 9H5v-3l9-9zM12 5l3 3"/></svg>
+            </button>
           </div>
         `).join('')}
       </div>
@@ -1087,9 +1199,9 @@ async function refreshWarrantyTable() {
   const { data, error } = await supa.from(TABLE).select('*')
     .order('created_at',{ascending:false}).limit(50);
   const tbody = document.getElementById('w-table');
-  if (error) { tbody.innerHTML = `<tr><td colspan="5" class="px-5 py-6 text-[13px] text-ink-mute">${escapeHtml(error.message)}</td></tr>`; return; }
+  if (error) { tbody.innerHTML = `<tr><td colspan="6" class="px-5 py-6 text-[13px] text-ink-mute">${escapeHtml(error.message)}</td></tr>`; return; }
   if (!data || !data.length) {
-    tbody.innerHTML = `<tr><td colspan="5" class="px-5 py-10 text-center text-[13px] text-ink-mute">No records yet</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="px-5 py-10 text-center text-[13px] text-ink-mute">No records yet</td></tr>`;
     return;
   }
   tbody.innerHTML = data.map(r => `
@@ -1098,7 +1210,12 @@ async function refreshWarrantyTable() {
       <td class="px-3 py-3">${escapeHtml(r.battery_type)}</td>
       <td class="px-3 py-3 truncate max-w-[260px]">${escapeHtml(r.party_name)}</td>
       <td class="px-3 py-3"><span class="inline-block px-2 py-0.5 bg-lav-50 text-lav-700 rounded-full text-[11.5px]">${escapeHtml(r.driver_name)}</span></td>
-      <td class="px-3 sm:px-8 py-3 text-ink-mute whitespace-nowrap text-[12.5px]">${escapeHtml(timeAgo(r.created_at))}</td>
+      <td class="px-3 py-3 text-ink-mute whitespace-nowrap text-[12.5px]">${escapeHtml(timeAgo(r.created_at))}</td>
+      <td class="px-3 sm:px-8 py-3 text-right">
+        <button data-edit-id="${escapeHtml(r.id)}" class="p-1.5 rounded-md hover:bg-cream-dark text-ink-mute hover:text-ink transition" aria-label="Edit">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 3l3 3-9 9H5v-3l9-9zM12 5l3 3"/></svg>
+        </button>
+      </td>
     </tr>
   `).join('');
 }
@@ -1219,6 +1336,88 @@ async function checkConn() {
     document.getElementById('conn-label').textContent = 'Offline';
   }
 }
+
+/* ============================================================
+ *  EDIT MODAL
+ * ============================================================ */
+function openEditById(id) {
+  // Pull the latest record to avoid editing stale data
+  supa.from(TABLE).select('*').eq('id', id).single().then(({ data, error }) => {
+    if (error || !data) { toast('Could not load record', 'err'); return; }
+    openEdit(data);
+  });
+}
+function openEdit(r) {
+  document.getElementById('e-id').value = r.id;
+  document.getElementById('e-serial').value = r.serial_number || '';
+  document.getElementById('e-driver').value = r.driver_name || '';
+  document.getElementById('e-notes').value  = r.notes || '';
+  setDD(ddETYpe,  r.battery_type);
+  setDD(ddEParty, r.party_name);
+
+  document.getElementById('edit-meta').textContent =
+    `id ${r.id.slice(0,8)} · scanned ${fmtFull(r.created_at)}`;
+
+  document.getElementById('edit-backdrop').classList.remove('hidden');
+  document.getElementById('edit-modal').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+}
+function closeEdit() {
+  document.getElementById('edit-backdrop').classList.add('hidden');
+  document.getElementById('edit-modal').classList.add('hidden');
+  document.body.style.overflow = '';
+}
+document.getElementById('edit-close').onclick  = closeEdit;
+document.getElementById('edit-cancel').onclick = closeEdit;
+document.getElementById('edit-backdrop').onclick = closeEdit;
+
+document.getElementById('edit-save').onclick = async (e) => {
+  e.preventDefault();
+  const id     = document.getElementById('e-id').value;
+  const serial = document.getElementById('e-serial').value.trim();
+  const type   = ddETYpe.dataset.value;
+  const party  = ddEParty.dataset.value;
+  const driver = document.getElementById('e-driver').value.trim();
+  const notes  = document.getElementById('e-notes').value.trim() || null;
+
+  if (!serial) return toast('Serial required', 'warn');
+  if (!type)   return toast('Pick a battery type', 'warn');
+  if (!party)  return toast('Pick a party', 'warn');
+  if (!driver) return toast('Driver required', 'warn');
+
+  const btn = document.getElementById('edit-save');
+  const lbl = document.getElementById('edit-save-label');
+  btn.disabled = true; lbl.textContent = 'Saving…';
+
+  const { error } = await supa.from(TABLE).update({
+    serial_number: serial,
+    battery_type:  type,
+    party_name:    party,
+    driver_name:   driver,
+    notes:         notes,
+  }).eq('id', id);
+
+  btn.disabled = false; lbl.textContent = 'Save changes';
+
+  if (error) { toast('Update failed: ' + error.message, 'err'); return; }
+
+  toast('Updated ✓');
+  navigator.vibrate?.(60);
+  closeEdit();
+  // refresh whichever views are visible
+  loadFeed();
+  refreshWarrantyTable();
+  if (document.getElementById('w-search').value.trim()) runLookup();
+  bumpStats();
+};
+
+// Delegate clicks on any [data-edit-id] to open the modal
+document.addEventListener('click', e => {
+  const btn = e.target.closest('[data-edit-id]');
+  if (!btn) return;
+  e.preventDefault(); e.stopPropagation();
+  openEditById(btn.dataset.editId);
+});
 
 /* ============================================================
  *  BOOT
