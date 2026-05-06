@@ -141,6 +141,8 @@
 
   /* Searchable dropdown — mobile bottom-sheet treatment */
   .dd-pop { box-shadow: 0 8px 28px -8px rgba(10,10,10,0.20), 0 0 0 1px rgba(10,10,10,0.06); }
+  /* Critical: make sure .hidden wins over .dd-mobile's display:flex */
+  .dd-pop.hidden { display: none !important; }
   .dd-pop.dd-mobile {
     position: fixed !important;
     left: 12px !important;
@@ -359,7 +361,7 @@
             </div>
           </div>
 
-          <div class="mt-3 flex flex-wrap gap-2">
+          <div class="mt-3 flex flex-wrap items-center gap-2">
             <button id="btn-start-scan" class="inline-flex items-center gap-2 bg-ink text-cream px-4 py-2.5 rounded-lg text-[13.5px] font-medium hover:bg-ink-soft transition">
               <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="6" width="18" height="13" rx="2"/><circle cx="12" cy="12.5" r="3.5"/><path d="M8 6l1.5-2h5L16 6"/></svg>
               Start camera
@@ -367,6 +369,18 @@
             <button id="btn-stop-scan" class="hidden inline-flex items-center gap-2 bg-cream-dark text-ink px-4 py-2.5 rounded-lg text-[13.5px] font-medium border border-cream-deep hover:bg-cream-deep transition">
               Stop
             </button>
+            <!-- Camera tools shown only when scanner is running and capabilities exist -->
+            <div id="cam-tools" class="hidden flex items-center gap-2 ml-auto">
+              <button id="btn-torch" type="button" class="hidden inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-cream-dark border border-cream-deep text-[12.5px] font-medium hover:bg-cream-deep transition" aria-pressed="false">
+                <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor"><path d="M10 2L5 11h4l-1 7 6-9h-4l1-7z"/></svg>
+                Torch
+              </button>
+              <div id="zoom-wrap" class="hidden flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cream-dark border border-cream-deep">
+                <span class="text-[11px] font-mono text-ink-mute">zoom</span>
+                <input id="cam-zoom" type="range" min="1" max="3" step="0.1" value="1" class="w-20 accent-ink" />
+                <span id="zoom-val" class="text-[11px] font-mono text-ink-mute tabular-nums w-7">1.0×</span>
+              </div>
+            </div>
           </div>
 
           <!-- Manual input -->
@@ -397,6 +411,8 @@
                 <div id="parsed-type" class="text-[14px] font-medium mt-0.5">—</div>
               </div>
             </div>
+            <!-- Yantrayug verification slot -->
+            <div id="parsed-verify" class="mt-3 pt-3 border-t border-lav-100"></div>
           </div>
         </div>
       </div>
@@ -442,8 +458,15 @@
           <div>
             <label class="text-[11px] uppercase tracking-wider text-ink-mute font-medium">Driver</label>
             <div id="driver-chips" class="mt-1.5 flex flex-wrap gap-1.5"></div>
-            <input id="f-driver-other" type="text" placeholder="Or type a name…"
-              class="mt-2 w-full px-3.5 py-2.5 rounded-lg border border-cream-deep bg-cream/40 focus:bg-white focus:border-ink-soft focus:outline-none transition text-[14px]" />
+            <div class="mt-2 flex gap-2">
+              <input id="f-driver-other" type="text" placeholder="Or type a new driver name…" autocomplete="off"
+                class="flex-1 px-3.5 py-2.5 rounded-lg border border-cream-deep bg-cream/40 focus:bg-white focus:border-ink-soft focus:outline-none transition text-[14px]" />
+              <button type="button" id="btn-add-driver"
+                class="px-4 py-2.5 rounded-lg bg-cream-dark text-ink border border-cream-deep hover:bg-cream-deep transition text-[13px] font-medium whitespace-nowrap">
+                + Add
+              </button>
+            </div>
+            <p class="mt-1.5 text-[11.5px] text-ink-faint">Type and tap Add to keep them as a chip for next time.</p>
           </div>
 
           <!-- Notes -->
@@ -662,12 +685,20 @@
 const SUPA_URL  = 'https://lsnudhxlyypugunlgwxi.supabase.co';
 const SUPA_ANON = 'sb_publishable_L7QYt5YnYHWGbIr_o79t9w_5wVMuzSv';
 const TABLE = 'battery_returns';
+const YANTRAYUG_TABLE = 'yantrayug_batteries';   // optional, populated by import job
 
-const DRIVERS = [
-  'GORE', 'KAPRE', 'SUTKAR', 'SAHIL', 'RAUFF', 'SHEKAR'
-]; // edit these to match your actual drivers
+// Default seed drivers — additions persist in Supabase via battery_intake_options
+let DRIVERS = [
+  'Kapre', 'Sutkar', 'Sahil', 'Gore', 'Rauff', 'Shekar'
+];
 
 const supa = window.supabase.createClient(SUPA_URL, SUPA_ANON);
+
+const OPTIONS_TABLE = 'battery_intake_options';
+
+/* Mutable runtime caches — start with embedded seed, then merge custom additions on boot */
+let ALL_PARTIES = null;          // populated below from PARTIES
+let ALL_BATTERY_TYPES = null;    // populated below from BATTERY_TYPES
 
 /* ============================================================
  *  SEED DATA  (303 parties, 74 battery types)
@@ -675,6 +706,62 @@ const supa = window.supabase.createClient(SUPA_URL, SUPA_ANON);
 const PARTIES = ["A 1 AUTOMOBILES AND SPARES (CHAKAN)", "A ONE AUTOMOBILES (SOMATNE PHATA)", "A1 AUTOMOBILES ( TALEGAON)", "A1 AUTOMOBILES(CHAKAN)", "AADITYA CHAKAN", "ABHIJEET AUTO GARAGE (PIMPLE SAUDAGAR)", "ADHIRA AUTOMOBILES ( MARUNJI)", "ADITYA AUTOMOBILES ( KHALUMBRE )", "ADITYA AUTOMOBILES (CHAKAN)", "AHS AUTOMOBILES ( LONAWALA)", "AKSHRA ENTERPRISES (CHIKHALI)", "AMBUJA BATTERY(OLD SANGAVI)", "AMIT AUTOMOBILES (SANGAMNER)", "AMIT TYRE (GHARGAON)", "AMIT TYRES AND AUTO SERVICE", "AMOL AUTO (PABAL)", "AMOL AUTO GARAGE (THERGAON)", "AMRITA BATTERY (CHINCHWAD)", "ANANDI AUTOMOBILES & BIKE POINT, (MARUNJI)", "ANSIKA BIKE POINT (PIMPALE SAUDAGAUR)", "ARUN CAR CARE (THATHWADE )", "ASTIK AUTOMOBILES (AKURDI)", "ASV AUTO GARAGE (TATHWADE)", "ATHARV ENTERPRISES ( BANER)", "ATUL AUTO (BHOSARI)", "AVDHUT ENTERPRISES (DIGHI)", "BALAJI ACCESSORIES (ALANDI DUDALGAON)", "BALAJI AUTO (SPINE ROAD)", "BALAJI AUTO GALERIA ( KASARWADI )", "BALAJI AUTOMOBILE (THERGAON)", "BALAJI AUTOMOBILES ( NIGADI)", "BALAJI AUTOMOBILES ( PIMPALE SAUDAGAR)", "BALAJI AUTOMOBILES, HINJAWADI", "BALAJI BIKE CARE( HINJEWADI)", "BANSAL AUTOMOBILES (CHIKHALI)", "BANSAL AUTOMOBILES (PIMPALE GURAV)", "BATTERY POWER LINES (BANER)", "BHAIRAVNATH AUTOMOBILES ( NIGADI)", "BHAIRVNATH AUTOMOBILES (THERGAON)", "BHARAT AUTO SPARES (TALWADE)", "BHARAT AUTOMOBILES (RAHATNI)", "BHAVANI AUTOMOBIL (THATHWADE)", "BIKE POINT SERVICE CENTER( TATHWADE)", "BIKE POINTAUTOMOBILES ( TALEGAON)", "BIKER LAB (WAKAD)", "BIKER ZONE, HINJAWADI", "Balaji automobile", "CHAITNYA AUTOMOBILES ( VALLABHANAGAR)", "CHOICE AUTO SPARES ( KALEWADI)", "CITY AUTOMOBILES ( TALEGAON)", "D P POWER SOLUTION (BANER )", "D.P. POWER LINE (CHATURSHRUNGI )", "DATTATRAY AUTO (KASARWADI)", "DEEP AUTOMOBILES ( PIMPARI)", "DHANLAXMI AUTOMOBILES ( TAPKIR MALA )", "DHANLAXMI AUTOMOBILES (BHOSARI )", "DHANLAXMI TRADERS (CHAKAN)", "DNYANDEEP AUTOMOBILES ( TALWADE )", "EKVEERA AUTO CARE (KHED)", "ENERGY BATTERY (TALEGAON)", "ENGINE BUDDY (WALHEKARWADI )", "FAB MANNSCHAFT(JAGTAP DAIRY)", "FORTUNE BATTERY CARE (KASPATE WASTI)", "GANESH AUTO (PABAL)", "GANESH AUTOMOBILES ( THERGAON)", "GEAR UP RIDE NON STOP (RAVET)", "GEETA AUTO WORKS (SANGAVI)", "GIRIRAJ AUTOMOBILES (JAGTAP DAIRY)", "GK AUTOMOBILES ( HINJAWADI)", "GO GERAGE(WAKAD)", "GRSV ENTERPRISES ( AKURDI)", "GS BIKE CARE ( WAKAD)", "GUNJAN MOTORS (CHINCHWAD)", "GURUDATTA AUTOMOBILES (SANGVI)", "HARI OM AUTO ( RAHATNI)", "HARI OM AUTO (PIMPRI)", "HARI OM AUTOMOBILES ( KASARWADI )", "HARI OM AUTOMOBILES (PIMPRI)", "HARSHADA AUTO (CHINCHWAD)", "HASAN AUTO GARAGE( CHINCHWAD)", "HRUSHIKESH AUTO CARE (THERGAON)", "IGNITION AUTO SALES & SERVICE ( NIGADI )", "INDRAI BATTERY (RAVET)", "JAI GANESH AUTO SPARES (CHINCHWAD)", "JAI RAJ AUTO P G", "JAYLAKSHMI AUTOMOBILES (BHUGAON)", "JAYRAJ AUTO (PIMPALE SAUDAGAR)", "JAYRAJ PRAVIN AUTOMOBILES (PIMPARI)", "JAYSHREE AUTO SPARES (KALEWADI)", "JAYSHREE AUTOMOBILES( PIMPALE GURAV )", "JHABHAKH AUTO (BANER)", "JITENDRA AUTO (RAVET)", "JYOTIBA AUTO GARAGE (WAKAD)", "KARTIK BATTERY (TATHAWADE)", "KASTURI AUTOMOBILE (CHINCHWAD)", "KGN AUTOMOBILES ( BHOSARI )", "KHAN AUTO GARAGE (BOPODI)", "KHUSHI ENTERPRISES (CHINCHWAD)", "KONARK AUTO(MANCHAR)", "KRUSHNA AUTO SPARES ( MOSHI)", "KRUSHNA AUTOMOBILES (NIGADI)", "KRUSHNA SERVICES (PIMPALE SAUDAGAR)", "LAKSHMI AUTOMOBILES", "LAXMI AUTO (DANGE CHOWK)", "LAXMI AUTO, JAGTAP DAIRY", "LAXMI NARAYAN (YOGESH YEWALE )", "LAXMI NARAYAN AUTOMOBILE (SOMATNE FATA)", "LOUIS AUTO WORK (THERGAON)", "LUNAWAT TYRE AND OIL ( RAJGURUNAGAR )", "M K AUTOMOBILES(HINJAWADI-PIRANGUT", "M S K AUTOMOBILES ( WAKAD)", "M.K AUTOMOBILES(HINJEWADI PIRANGUT)", "MAHADEV AUTO MOSHI", "MAHADEV AUTOMOBILES (PIMPRI)", "MAHALAKSHMI AUTO (DEHU ROAD)", "MAHALAKSHMI AUTO (KUDALWADI)", "MAHALAXMI (KALAKADAK)", "MAHALAXMI AUTO PARTS &OIL DEPO (HINJAWADI)", "MAHALAXMI AUTOMOBILES ( PAUD)", "MAHALAXMI AUTOMOBILES (WAKAD KALAKHADAK)", "MAHARASHTRA AUTO &BIKE CARE (CHINCHWAD )", "MAHARASHTRA AUTO CARE", "MAHARUDRA AUTO (MARUNJI)", "MALHAR ( MANCHER)", "MAMATA AUTO HINJAWDI", "MAMTA AUTO (KALEWADI)", "MAMTA AUTOMOBILES & BIKE POINT ( MARUNJI )", "MAMTA AUTOMOBILES ( NERE)", "MAMTA MARUNJI", "MAULI AUTO SERVICE CENTRE", "MAULI AUTO(KASPATE WASTI", "MAULI AUTOMOBILES (HINJAWADI)", "MAULI KRUPA AUTO GARAGE ( PIRANGUT )", "MAULI MOTORS (CHAKAN)", "MAYANK AUTO (MAAN)", "MAYANK AUTOMOBILES", "MAYANK AUTOMOBILES HINJAWADI", "MAYANK AUTOMOBILES MAAN", "MAYUR AUTOMOBILES (CHIKHALI)", "MEGAHA AUTO( HINJAWADI)", "MILLIND MOTORS (BIJALI NAGAR)", "MODERN TYRE TUBES ( CHIKHALI )", "Mauli services station", "N M AUTOMOBILES (PIMPLE GURAV)", "NAMO AGENCES", "NEHA AUTO TATHAWADE", "NEHA AUTOMOBILES (TATHAWADE)", "NEHARE AUTOMOBILES KHED", "NEW BATTERY POINT (PUNAWALE)", "NEW CHOICE AUTO (HINJEWADI)", "NEW DHANLAXMI AUTO (MALUNGE)", "NEW GIRIRAJ AUTOMOBILES (VISHAL NAGAR)", "NEW INDIA ENTERPRISES (DEHU)", "NEW JYOTIBA BATTERI (RAHATANI)", "NEW MAHARASHTRA AUTO (BANER)", "NEW MAHARASHTRA AUTO SPARES (BANER)", "NEW PRAMOD AUTOMOBILES ( VASULI PHATA)", "NEW RAJ AUTOMOBILES (PIMPALE GURAV )", "NEW ROYAL AUTO SPARES( BOPODI)", "NIKHIL BATTERY &AUTOMOBILES (LONAWALA)", "NILESH AUTOMOBILES", "NILESH AUTOMOBILES ( CHAKAN )", "NITESH AUTO TALEGAON", "NOORI ENTERPRISES (LONAWALA)", "OK MOTORS BANER", "OM AUTO CHAKAN", "OM AUTO GARAGE ( LONAWALA )", "OM AUTO GARAGE (KALEWADI)", "OM AUTOMATION(CHIKHALI)", "OM AUTOMOBILES (AKURDI)", "OM SAI AUTO LUBES&BATTERIES (KHALUMBRE)", "OM SAI AUTOMOBILE", "OM SAI AUTOMOBILES ( TALEGAON/KAMSHET)", "OM SAI AUTOMOBILES (CHIKHALI)", "OM SAI KAMSHET", "OM SAI KAREGAON", "OM SAI PATIL (HINJEWADI)", "OM SHANTI TRADERS", "OMSAI TALEGAON", "PANCHMUKHESHWAR(WAKAD)", "PAPPU AUTO GARAGE (RAHATANI)", "PAWAR DISTRIBUTION (SOLAPUR)", "POPAT BORA", "PRABHAT AUTO POINT ( BELHE )", "PRAGATI TWO WHILLER ACCESSORIES (PIMPARI)", "PRASHANT AUTO (PIMPRI)", "PRATHMESH AUTOMOBILES (TATHWADE)", "PRINCE AUTOMOBILES (WAKAD)", "PRINCE MARUNJI", "R.K.(LONAWALA)", "RAJ AUTO CARE (NEW SANGVI)", "RAJ AUTO GARAGE (PIMPALE GURAV)", "RAJ AUTOMOBILES (KALEWADI)", "RAJPAL AUTO (PIMPRI)", "RATHOD AUTO PARTS (AUNDH)", "RAVI BATTERY", "REAL AUTO( DAPODI)", "RISHAN AUTOMOBILES (KALEWADI)", "ROHIT AUTOMOBILES", "ROYAL AUTOMOBILES ( MOI)", "ROYAL AUTOMOBILES ( PIMPALE GURAV)", "RUDRAKSH AUTOMOBILS (BIJALI NAGAR )", "RUDRAKSHA AUTOMOBILES (BIJALI NAGAR )", "RUSHIKESH AUTO CARE", "Royal automobiles", "S S AUTO (VISHAL NAGAR)", "S.M.ENTERPRISES (CHINCHWAD)", "S.S AUTO VISHALNAGAR", "SADGURU AUTO (AMBEDKAR CHOWK)", "SAHEB AUTO(WAKAD)", "SAI AUTO DEHU", "SAI AUTO SERVICE ( DAPODI)", "SAI AUTO SPARE", "SAI AUTO SPARES ( DEHU)", "SAI AUTO SPARES(MOSHI)", "SAI AUTO( MOSHI)", "SAI AUTOMOBILES & GARAGE (SOMANTE FATA)", "SAI AUTOMOBILES ( BHOSARI )", "SAI DEEP AUTO SERVICE (CHINCHWAD )", "SAI SERVICE (CHINCHWAD)", "SAI SERVICE KOTHRUD", "SAI SERVICE PRIVATE LIMITED ( KOTHRUD)", "SAI SERVICE PRIVATE LIMITED (PHUGEWADI)", "SAINI AUTOMOBILE (MUKAI CHOWK)", "SAIRAJ AGENCY (CHINCHWAD)", "SAIRAJ AGENECIES", "SAIRAM AUTOMOBILES", "SAIRAM BATTERY( SANGAVI)", "SAMARTH AUTO SERVICE (RAHATNI)", "SAMARTH AUTOMOBILES (WALHEKARWADI)", "SANA AUTO SPARE &SERVICE (GHODEGAON)", "SANA TYRE GHODEGAON", "SANDEEP AUTOMOBILES (KUDALWADI)", "SANJAY AUTO SPARE PARTS (MANCHER )", "SANKET AUTO CARE (MARUNJI)", "SATHE SERVICE CENTER ( HINJAWADI)", "SAURABH BATTERY (JAGTAP DAIRY)", "SAVI AUTOMOBILE (MARUNJI)", "SAYKER SERVICE STATION( CHINCHWAD)", "SERVICING KARO (MAAN)", "SHANTI AUTOMOBILS (HINJEWADI)", "SHARVARI AUTO CARE(AVSARI BUDRUK)", "SHINDE AUTO SPARES MANCHER", "SHIV AUTOMOBILES (HINJEWADI)", "SHIV AUTOMOBILES (SANGVI)", "SHIV BIKE SERVICE CENTRE (PIMPALE SAUDAGAUR)", "SHIVA MOTORS (MAAN ROAD HINJEWADI)", "SHIVAM BATTERYES ( BALEWADI )", "SHIVNERI MOTORS (PIMPLE GURAV)", "SHIVSHAKTI AUTO & SERVICE ( NIGADI)", "SHIVSHAKTI TYRE ( RAHATANI )", "SHREE AUTO SPARES (NARAYANGAON)", "SHREE AUTOMOBILE(MARUNJI)", "SHREE BIKE POINT (PIMPALE SAUDAGAUR)", "SHREE GAJANAN AUTO MOBILES (DANGE CHOWK)", "SHREE GANESH AUTO CENTRE (PIMPLE GURAV)", "SHREE GANESH BATTERY(BHUGAON)", "SHREE KRUSHNA (RAHTANI)", "SHREE RAM AUTO (PG)", "SHREE RAM AUTO (PIMPLE GUARAV)", "SHREE RAM AUTOMOBILES ( KASPATEWASTI )", "SHREE RAM AUTOMOBILES (KARNATAKA)", "SHREE RAM AUTOMOBILES (PIMPALE GURAV)", "SHREE SAI AUTOMOBILES (SOMATANE PHATA)", "SHREE SAMARTH, KAMSHET", "SHREE(GURUKERWALEKERWADE)", "SHREERAM BATTAETY (OLD SANGVI )", "SHREEYASH (SOMATNE PHATA)", "SHREYASH AUTO SOMATANE PHATA", "SHRI BHAIRAVNATH AUTOMOBIL(DEHUGAON)", "SHRI BHAIRVNATH DEHU", "SHRI GANESH TYRE ( BHUGAON )", "SHRI GURU AUTOMOBILES (WALEKARWADI)", "SHRI JITENDRA AUTO (RAVET)", "SHRI JITENDRA AUTO PARTS ( RAVET)", "SHRI JITENDRA AUTO PARTS( RAVET)", "SHRI KRISHNA (ALEPHATA)", "SHRI SAI AUTO GARAGE PS", "SHRI SAI AUTOMOBILE (CHINCHWAD)", "SHRI SAMARTH AUTO, TALEGAON", "SHRIYANSH AUTO (PIMPALE SAUDAGAUR)", "SIDDHA TESTOLOGIES AUNDH", "SIDDHIVINAYAK AUTOLINE( TALEGAON)", "SIDDHIVINAYAK AUTOMOBILE TALEGAON", "SIDHHIVINAYAK AUTOMOBILES (RAHATANI)", "SIYARAM AUTOMOBILES (GHODEGAON)", "SUDARSHAN SERVICE CENTER (SANGAVI)", "SUNNY AUTO CARE ( VISHAL NAGAR)", "Shri guru automobiles", "Speed automotive services", "THE BATTERY SOLUTION (WAKAD)", "TULSI AUTOMOBILES (PIMPARI)", "UTTAM AUTO (WALHEKARWADI)", "VAIBHAV AUTO PG", "VIJAY (PIMPRI)", "VYAVAHARE AUTOMOBILES ( DEHU ROAD )", "WARIE AUTOMOBILES(THERGAON)", "YANTRAYUG AUTO COUNTER CUSTOMER", "YANTRAYUG AUTO CUSTOMER", "YANTRAYUG AUTO, TATHWADE", "YANTRAYUG AUTOMOBILE", "YOGESHWAR AUTO (CHAKAN)", "YOGESHWAR AUTO (RAJGURUNAGAR)"];
 const BATTERY_TYPES = ["12MF5L-B", "12XL14L-A2", "12XL2.5L-C", "12XL5L-B", "12XL7B-B", "12XL9-B", "75D23L", "DIN100", "DIN70ISS", "DRIVE 88L", "DRIVE100L", "DRIVE130R", "DRIVE150R", "DRIVE40LBH", "DRIVE700RF", "DRIVE80L", "DRIVE80R", "EKO32", "EKO40L", "EKO60L", "EKO60R", "EPIQDIN74L", "ETZ4", "ETZ5", "EY105D31L", "EY105D31R", "EY34B19L", "EY34B19R", "EY700", "EY700F", "EY700L", "EY80D23R", "EYDIN52RMFEFB", "EYDIN78LMFEFGB", "IBRFP5000", "IMST 1500", "IMTT2000", "IMTT2300", "KI 88 T", "KI90H29L", "ML38B20L", "ML38B20R", "ML40LBH", "ML40RBH", "ML45D21LBH", "ML55D23L", "ML75D23LBH", "MLDIN44LH", "MLDIN44R", "MLDIN47RMFEFB", "MLDIN50", "MLDIN55R", "MLDIN60", "MLDIN66", "MLDIN70(ISS)", "MLDIN78LMFEFB", "MLDIN80", "MLN55 (ISS)", "MT40B20L", "MTRED45L", "MTREDDIN100", "XLTX14", "XLTZ4", "XLTZ4A", "XLTZ5", "XLTZ5A", "XLTZ6", "XLTZ7", "XLTZ9", "XP1000", "XP1300", "XP1500", "XP800", "XP880"];
 
+
+/* ============================================================
+ *  RUNTIME OPTION LISTS
+ *  Start with the embedded seed; mergeCustomOptions() merges in
+ *  user-added parties and battery types from Supabase on boot.
+ * ============================================================ */
+ALL_PARTIES        = [...PARTIES];
+ALL_BATTERY_TYPES  = [...BATTERY_TYPES];
+
+async function mergeCustomOptions() {
+  const { data, error } = await supa.from(OPTIONS_TABLE).select('kind, name');
+  if (error) { console.warn('options load failed:', error.message); return; }
+  if (!data) return;
+  const setP = new Set(ALL_PARTIES.map(s => s.toLowerCase()));
+  const setT = new Set(ALL_BATTERY_TYPES.map(s => s.toLowerCase()));
+  const setD = new Set(DRIVERS.map(s => s.toLowerCase()));
+  data.forEach(r => {
+    if (r.kind === 'party' && !setP.has(r.name.toLowerCase())) {
+      ALL_PARTIES.push(r.name); setP.add(r.name.toLowerCase());
+    } else if (r.kind === 'type' && !setT.has(r.name.toLowerCase())) {
+      ALL_BATTERY_TYPES.push(r.name); setT.add(r.name.toLowerCase());
+    } else if (r.kind === 'driver' && !setD.has(r.name.toLowerCase())) {
+      DRIVERS.push(r.name); setD.add(r.name.toLowerCase());
+    }
+  });
+  ALL_PARTIES.sort((a,b) => a.localeCompare(b));
+  ALL_BATTERY_TYPES.sort((a,b) => a.localeCompare(b));
+  DRIVERS.sort((a,b) => a.localeCompare(b));
+  rebindDropdowns();
+  if (typeof renderDriverChips === 'function') renderDriverChips();
+}
+
+async function addCustomOption(kind, rawName) {
+  const name = (rawName || '').trim();
+  if (!name) return { ok: false, error: 'Empty name' };
+  if (name.length > 200) return { ok: false, error: 'Too long' };
+
+  const list = (kind === 'party') ? ALL_PARTIES
+            : (kind === 'type')  ? ALL_BATTERY_TYPES
+            : (kind === 'driver') ? DRIVERS
+            : null;
+  if (!list) return { ok: false, error: 'Bad kind' };
+
+  const exists = list.find(x => x.toLowerCase() === name.toLowerCase());
+  if (exists) return { ok: true, name: exists, existed: true };
+
+  const { error } = await supa.from(OPTIONS_TABLE).insert([{ kind, name }]);
+  if (error && !/duplicate key/i.test(error.message)) {
+    return { ok: false, error: error.message };
+  }
+  list.push(name);
+  list.sort((a,b) => a.localeCompare(b));
+  rebindDropdowns();
+  if (kind === 'driver' && typeof renderDriverChips === 'function') renderDriverChips();
+  return { ok: true, name, existed: false };
+}
 
 /* ============================================================
  *  QR PARSER
@@ -703,6 +790,117 @@ function parseExideQR(raw) {
 
   // Single token / short
   return { serial: tokens.join(''), type: null, format: 'short', raw };
+}
+
+/* ============================================================
+ *  YANTRAYUG VERIFICATION
+ *  Optional: checks against a local snapshot of yantrayug.com's
+ *  battery sales table. If yantrayug_batteries doesn't exist or
+ *  isn't populated yet, we silently skip the local check and just
+ *  show the external lookup link.
+ * ============================================================ */
+let YANTRAYUG_TABLE_AVAILABLE = null;   // null=unchecked, true=ready, false=not set up
+
+const YT_BASE = 'https://www.yantrayug.com/batteryrec/';
+function yantrayugExternalUrl(serial) {
+  // The yantrayug page uses uppercase; csrf token is decorative on GET (Django skips CSRF for GET)
+  return `${YT_BASE}?battery_sr_no=${encodeURIComponent((serial || '').toUpperCase())}`;
+}
+
+async function checkYantrayugTable() {
+  if (YANTRAYUG_TABLE_AVAILABLE !== null) return YANTRAYUG_TABLE_AVAILABLE;
+  try {
+    const { error } = await supa.from(YANTRAYUG_TABLE).select('serial_number', { count: 'exact', head: true }).limit(1);
+    YANTRAYUG_TABLE_AVAILABLE = !error;
+  } catch (e) {
+    YANTRAYUG_TABLE_AVAILABLE = false;
+  }
+  return YANTRAYUG_TABLE_AVAILABLE;
+}
+
+async function lookupYantrayug(serial) {
+  if (!serial) return { state: 'empty' };
+  const ready = await checkYantrayugTable();
+  if (!ready) return { state: 'unavailable' };
+  const key = serial.toLowerCase();
+  const { data, error } = await supa.from(YANTRAYUG_TABLE)
+    .select('serial_number, prod_code, distributor, inv_date, replaced_serial, replaced_prod_code')
+    .eq('serial_number', key).maybeSingle();
+  if (error) return { state: 'error', error: error.message };
+  if (!data)  return { state: 'not_found' };
+  return { state: 'found', record: data };
+}
+
+function renderVerifyChip(host, serial, result) {
+  if (!host) return;
+  const extUrl = yantrayugExternalUrl(serial);
+  const externalBtn = `
+    <a href="${extUrl}" target="_blank" rel="noopener noreferrer"
+       class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/70 border border-cream-deep text-[11.5px] font-medium text-ink-soft hover:bg-white transition">
+      Verify on yantrayug.com
+      <svg class="w-3 h-3" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3h7v7M13 3L4 12"/></svg>
+    </a>`;
+
+  let chip = '';
+  if (result.state === 'found') {
+    const r = result.record;
+    const replaced = r.replaced_serial && r.replaced_serial !== 'None'
+      ? `<div class="text-[11px] text-ink-mute mt-1">Already replaced once: <span class="font-mono">${escapeHtml(r.replaced_serial)}</span></div>`
+      : '';
+    chip = `
+      <div class="flex items-start gap-2.5 p-2.5 rounded-lg bg-mint-300/40 border border-mint-300">
+        <span class="mt-0.5 inline-flex items-center justify-center w-5 h-5 rounded-full bg-mint-500 text-cream flex-shrink-0">
+          <svg class="w-3 h-3" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 10l3 3 7-7"/></svg>
+        </span>
+        <div class="flex-1 min-w-0">
+          <div class="text-[12.5px] font-semibold text-ink">Yantrayug stock ✓</div>
+          <div class="text-[11.5px] text-ink-mute mt-0.5">
+            ${escapeHtml(r.prod_code || '—')} · sold ${escapeHtml(r.inv_date || '—')}${r.distributor ? ' · ' + escapeHtml(r.distributor) : ''}
+          </div>
+          ${replaced}
+        </div>
+      </div>`;
+  } else if (result.state === 'not_found') {
+    chip = `
+      <div class="flex items-start gap-2.5 p-2.5 rounded-lg bg-peach-100 border border-peach-300">
+        <span class="mt-0.5 inline-flex items-center justify-center w-5 h-5 rounded-full bg-ink text-cream flex-shrink-0">
+          <svg class="w-3 h-3" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 6l8 8M6 14L14 6"/></svg>
+        </span>
+        <div class="flex-1 min-w-0">
+          <div class="text-[12.5px] font-semibold text-ink">Not in Yantrayug records</div>
+          <div class="text-[11.5px] text-ink-mute mt-0.5">This battery wasn't sold by us — confirm before accepting.</div>
+        </div>
+      </div>`;
+  } else if (result.state === 'unavailable') {
+    chip = `
+      <div class="text-[11.5px] text-ink-mute">
+        <span class="inline-block w-1.5 h-1.5 rounded-full bg-ink-faint align-middle mr-1.5"></span>
+        Local Yantrayug lookup not set up yet
+      </div>`;
+  } else if (result.state === 'checking') {
+    chip = `
+      <div class="text-[11.5px] text-ink-mute flex items-center gap-2">
+        <span class="inline-block w-3 h-3 rounded-full border-2 border-ink-faint border-t-ink animate-spin"></span>
+        Checking Yantrayug records…
+      </div>`;
+  } else if (result.state === 'error') {
+    chip = `<div class="text-[11.5px] text-ink-mute">Could not check: ${escapeHtml(result.error || 'unknown')}</div>`;
+  }
+
+  host.innerHTML = `
+    <div class="space-y-2">
+      ${chip}
+      <div class="flex justify-end">${externalBtn}</div>
+    </div>`;
+}
+
+async function runVerifyInto(hostId, serial) {
+  const host = document.getElementById(hostId);
+  if (!host) return;
+  if (!serial) { host.innerHTML = ''; return; }
+  renderVerifyChip(host, serial, { state: 'checking' });
+  const res = await lookupYantrayug(serial);
+  renderVerifyChip(host, serial, res);
 }
 
 /* ============================================================
@@ -772,26 +970,37 @@ document.getElementById('mobile-menu-btn').onclick = () =>
 
 /* ============================================================
  *  SEARCHABLE DROPDOWN
+ *  Each scope is bound to a "kind" ('party' | 'type'). The live
+ *  list is looked up on every open from ALL_PARTIES /
+ *  ALL_BATTERY_TYPES, so newly added options appear immediately
+ *  without re-binding.
  * ============================================================ */
-const DD = { open:null, items:[], onSelect:null, value:null };
+const DD = { open:null, kind:null, items:[], onSelect:null, value:null, query:'' };
 
-function openDD(triggerEl, items, current, onSelect) {
-  DD.open = triggerEl; DD.items = items; DD.onSelect = onSelect; DD.value = current;
+function listFor(kind) {
+  if (kind === 'party') return ALL_PARTIES;
+  if (kind === 'type')  return ALL_BATTERY_TYPES;
+  return [];
+}
+function labelFor(kind) {
+  return kind === 'party' ? 'party' : 'battery type';
+}
+
+function openDD(triggerEl, kind, current, onSelect) {
+  DD.open = triggerEl; DD.kind = kind; DD.items = listFor(kind);
+  DD.onSelect = onSelect; DD.value = current; DD.query = '';
 
   const pop = document.getElementById('dd-pop');
   const backdrop = document.getElementById('dd-backdrop');
   const search = document.getElementById('dd-search');
   search.value = '';
+  search.placeholder = `Search ${labelFor(kind)}…`;
   pop.classList.remove('hidden');
 
   const isMobile = window.innerWidth < 640;
   if (isMobile) {
-    // Bottom sheet style — full width, anchored near top so keyboard doesn't shove it off-screen
     pop.classList.add('dd-mobile');
-    pop.style.left = '';
-    pop.style.right = '';
-    pop.style.top = '';
-    pop.style.width = '';
+    pop.style.left = ''; pop.style.right = ''; pop.style.top = ''; pop.style.width = '';
     backdrop.classList.remove('hidden');
     document.body.style.overflow = 'hidden';
   } else {
@@ -807,38 +1016,72 @@ function openDD(triggerEl, items, current, onSelect) {
     pop.style.top  = top + 'px';
   }
 
-  renderDDList(items);
-  // Auto-focus only on desktop — on mobile, let the user tap to open the keyboard
-  // when they're ready (avoids races with the in-flight tap event).
+  renderDDList(DD.items, '');
   if (!isMobile) search.focus();
 }
 function closeDD() {
-  document.getElementById('dd-pop').classList.add('hidden');
+  const pop = document.getElementById('dd-pop');
+  pop.classList.add('hidden');
+  pop.classList.remove('dd-mobile');
   document.getElementById('dd-backdrop').classList.add('hidden');
   document.body.style.overflow = '';
+  // Blur any focused input so the soft keyboard dismisses on mobile
+  if (document.activeElement && document.activeElement.tagName === 'INPUT') {
+    document.activeElement.blur();
+  }
   DD.open = null;
 }
-function renderDDList(items) {
+function renderDDList(items, query) {
   const list = document.getElementById('dd-list');
+  const q = (query || '').trim();
+  const exists = q && items.some(x => x.toLowerCase() === q.toLowerCase());
+  const showAdd = q.length >= 2 && !exists;
+
+  let html = '';
   if (!items.length) {
-    list.innerHTML = `<div class="px-4 py-6 text-center text-[13px] text-ink-mute">No matches</div>`;
-    return;
+    html += `<div class="px-4 py-6 text-center text-[13px] text-ink-mute">No matches</div>`;
+  } else {
+    html += items.slice(0, 200).map(it => `
+      <button type="button" data-val="${escapeHtml(it)}"
+        class="dd-item w-full text-left px-3.5 py-3 sm:py-2 hover:bg-lav-50 active:bg-lav-100 text-[14px] flex items-center justify-between gap-3 transition">
+        <span class="truncate">${escapeHtml(it)}</span>
+        ${it === DD.value ? '<svg class="w-4 h-4 text-lav-700 flex-shrink-0" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 10l3 3 7-7"/></svg>' : ''}
+      </button>
+    `).join('');
   }
-  list.innerHTML = items.slice(0, 200).map(it => `
-    <button type="button" data-val="${escapeHtml(it)}"
-      class="dd-item w-full text-left px-3.5 py-3 sm:py-2 hover:bg-lav-50 active:bg-lav-100 text-[14px] flex items-center justify-between gap-3 transition">
-      <span class="truncate">${escapeHtml(it)}</span>
-      ${it === DD.value ? '<svg class="w-4 h-4 text-lav-700 flex-shrink-0" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 10l3 3 7-7"/></svg>' : ''}
-    </button>
-  `).join('');
+  if (showAdd) {
+    html += `
+      <button type="button" id="dd-add" data-q="${escapeHtml(q)}"
+        class="w-full text-left px-3.5 py-3 sm:py-2.5 mt-1 border-t border-cream-deep/60 text-[13.5px] flex items-center gap-2 hover:bg-lav-50 active:bg-lav-100 transition">
+        <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-lav-700 text-cream">
+          <svg class="w-3 h-3" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M10 5v10M5 10h10"/></svg>
+        </span>
+        <span>Add new ${escapeHtml(labelFor(DD.kind))}: <span class="font-medium text-ink">${escapeHtml(q)}</span></span>
+      </button>`;
+  }
+  list.innerHTML = html;
 }
 document.getElementById('dd-search').addEventListener('input', e => {
-  const q = e.target.value.trim().toLowerCase();
-  if (!q) return renderDDList(DD.items);
-  const filt = DD.items.filter(it => it.toLowerCase().includes(q));
-  renderDDList(filt);
+  const q = e.target.value.trim();
+  DD.query = q;
+  const filt = !q ? DD.items : DD.items.filter(it => it.toLowerCase().includes(q.toLowerCase()));
+  renderDDList(filt, q);
 });
-document.getElementById('dd-list').addEventListener('click', e => {
+document.getElementById('dd-list').addEventListener('click', async e => {
+  // "+ Add new" path
+  const add = e.target.closest('#dd-add');
+  if (add) {
+    const raw = add.dataset.q;
+    add.disabled = true;
+    add.querySelector('span:last-child').textContent = `Adding "${raw}"…`;
+    const res = await addCustomOption(DD.kind, raw);
+    if (!res.ok) { toast(res.error || 'Could not add', 'err'); return; }
+    if (DD.onSelect) DD.onSelect(res.name);
+    toast(res.existed ? `Already existed · selected` : `Added ${labelFor(DD.kind)} ✓`);
+    closeDD();
+    return;
+  }
+  // Normal pick
   const b = e.target.closest('.dd-item'); if (!b) return;
   const val = b.dataset.val;
   if (DD.onSelect) DD.onSelect(val);
@@ -856,16 +1099,22 @@ document.getElementById('dd-backdrop').addEventListener('click', closeDD);
 // keyboard appearing fires a resize event, which would close the dropdown
 // the user just opened. Click-outside is enough.
 
-function bindDD(scope, items, onPick) {
+/* Each scope stores its kind on a data attr so we can re-bind / look up live. */
+function bindDD(scope, kind, onPick) {
+  scope.dataset.kind = kind;
+  scope._ddOnPick = onPick || null;
   const trig = scope.querySelector('.dd-trigger');
   const lbl  = scope.querySelector('.dd-label');
-  trig.addEventListener('click', () => {
-    openDD(trig, items, scope.dataset.value || null, val => {
+  // Replace any existing handler by cloning the node — keeps re-binds idempotent
+  const fresh = trig.cloneNode(true);
+  trig.parentNode.replaceChild(fresh, trig);
+  fresh.addEventListener('click', () => {
+    openDD(fresh, scope.dataset.kind, scope.dataset.value || null, val => {
       scope.dataset.value = val;
       lbl.textContent = val;
       lbl.classList.remove('text-ink-mute');
       lbl.classList.add('text-ink');
-      onPick && onPick(val);
+      scope._ddOnPick && scope._ddOnPick(val);
     });
   });
 }
@@ -878,14 +1127,16 @@ function setDD(scope, val) {
 
 const ddType  = document.querySelector('#intake-form [data-dd="type"]');
 const ddParty = document.querySelector('#intake-form [data-dd="party"]');
-bindDD(ddType,  BATTERY_TYPES);
-bindDD(ddParty, PARTIES);
-
-// Edit modal dropdowns
 const ddETYpe  = document.querySelector('[data-dd="e-type"]');
 const ddEParty = document.querySelector('[data-dd="e-party"]');
-bindDD(ddETYpe,  BATTERY_TYPES);
-bindDD(ddEParty, PARTIES);
+
+function rebindDropdowns() {
+  bindDD(ddType,   'type');
+  bindDD(ddParty,  'party');
+  bindDD(ddETYpe,  'type');
+  bindDD(ddEParty, 'party');
+}
+rebindDropdowns();
 
 /* ============================================================
  *  DRIVER CHIPS
@@ -911,6 +1162,24 @@ document.getElementById('driver-chips').addEventListener('click', e => {
 document.getElementById('f-driver-other').addEventListener('input', e => {
   if (e.target.value) { selectedDriver = null; renderDriverChips(); }
 });
+async function commitNewDriver() {
+  const inp = document.getElementById('f-driver-other');
+  const name = inp.value.trim();
+  if (!name) return toast('Type a name first', 'warn');
+  const btn = document.getElementById('btn-add-driver');
+  btn.disabled = true;
+  const res = await addCustomOption('driver', name);
+  btn.disabled = false;
+  if (!res.ok) return toast(res.error || 'Could not add driver', 'err');
+  selectedDriver = res.name;
+  inp.value = '';
+  renderDriverChips();
+  toast(res.existed ? 'Already saved · selected' : 'Driver added ✓');
+}
+document.getElementById('btn-add-driver').addEventListener('click', commitNewDriver);
+document.getElementById('f-driver-other').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); commitNewDriver(); }
+});
 
 /* ============================================================
  *  ESCAPE
@@ -925,13 +1194,16 @@ function escapeHtml(s) {
 function applyParse(p) {
   if (!p.serial) return;
   document.getElementById('f-serial').value = p.serial;
-  if (p.type && BATTERY_TYPES.includes(p.type)) setDD(ddType, p.type);
+  if (p.type && ALL_BATTERY_TYPES.includes(p.type)) setDD(ddType, p.type);
 
   const card = document.getElementById('parsed-card');
   card.classList.remove('hidden');
   document.getElementById('parsed-serial').textContent = p.serial;
   document.getElementById('parsed-type').textContent   = p.type || 'Pick manually';
   document.getElementById('parsed-format').textContent = p.format;
+
+  // Yantrayug verification — fires asynchronously, doesn't block form
+  runVerifyInto('parsed-verify', p.serial);
 }
 document.getElementById('btn-parse-manual').onclick = () => {
   const v = document.getElementById('manual-qr').value;
@@ -946,9 +1218,17 @@ document.getElementById('manual-qr').addEventListener('keydown', e => {
 
 /* ============================================================
  *  CAMERA SCANNER (html5-qrcode)
+ *  Optimized for small Exide QR labels:
+ *   - Native BarcodeDetector when supported (5-10x faster decode)
+ *   - 25 fps (up from 10) for more detection chances per second
+ *   - HD video request so small QR features have enough pixels
+ *   - Continuous autofocus
+ *   - Optional zoom slider + torch when the device supports them
  * ============================================================ */
 let qrInstance = null;
 let qrRunning = false;
+let camTrack = null;     // active video track for zoom/torch
+let torchOn = false;
 
 document.getElementById('btn-start-scan').onclick = async () => {
   if (qrRunning) return;
@@ -956,44 +1236,136 @@ document.getElementById('btn-start-scan').onclick = async () => {
   document.getElementById('btn-stop-scan').classList.remove('hidden');
 
   try {
-    qrInstance = new Html5Qrcode("reader", { verbose: false });
+    const fmt = (typeof Html5QrcodeSupportedFormats !== 'undefined')
+      ? [Html5QrcodeSupportedFormats.QR_CODE]
+      : undefined;
+
+    qrInstance = new Html5Qrcode("reader", {
+      verbose: false,
+      // HUGE: use the browser's native BarcodeDetector when available.
+      // Android Chrome 83+, iOS Safari 17+, EDA52 has it.
+      experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+      formatsToSupport: fmt
+    });
+
     const cameras = await Html5Qrcode.getCameras();
     if (!cameras.length) { toast('No camera found', 'err'); resetScannerUI(); return; }
-    // Prefer back camera
     const cam = cameras.find(c => /back|rear|environment/i.test(c.label)) || cameras[cameras.length - 1];
 
     await qrInstance.start(
-      cam.id,
-      { fps: 10, qrbox: { width: 240, height: 240 } },
+      { deviceId: { exact: cam.id } },
+      {
+        fps: 25,                                // up from 10 — more decode attempts/second
+        qrbox: { width: 280, height: 280 },     // wider visual scan window
+        aspectRatio: 1.7777,                    // 16:9 — uses more of the sensor
+        videoConstraints: {
+          deviceId: { exact: cam.id },
+          facingMode: { ideal: 'environment' },
+          width:  { ideal: 1920, min: 1280 },   // request HD or higher
+          height: { ideal: 1080, min: 720 },
+          focusMode: 'continuous'
+        }
+      },
       (decoded) => {
         const p = parseExideQR(decoded);
         applyParse(p);
         toast('Scanned ✓');
         navigator.vibrate?.(70);
-        // stop after one good scan
         stopScanner();
       },
-      () => { /* noisy decode errors ignored */ }
+      () => { /* noisy per-frame decode errors ignored */ }
     );
     qrRunning = true;
+    // After start, surface zoom/torch if the camera supports them
+    setTimeout(tryEnhanceCamera, 250);
   } catch (err) {
     console.error(err);
     toast('Camera blocked — use manual entry', 'err');
     resetScannerUI();
   }
 };
+
+async function tryEnhanceCamera() {
+  const video = document.querySelector('#reader video');
+  if (!video || !video.srcObject) return;
+  camTrack = video.srcObject.getVideoTracks()[0];
+  if (!camTrack || !camTrack.getCapabilities) return;
+  let caps = {};
+  try { caps = camTrack.getCapabilities(); } catch (e) { return; }
+
+  const tools = document.getElementById('cam-tools');
+  let anyTool = false;
+
+  // ZOOM — small QR labels really benefit from optical zoom on phones that support it
+  if (caps.zoom && typeof caps.zoom.max === 'number') {
+    const zoomEl  = document.getElementById('cam-zoom');
+    const zoomVal = document.getElementById('zoom-val');
+    const wrap    = document.getElementById('zoom-wrap');
+    zoomEl.min  = caps.zoom.min || 1;
+    zoomEl.max  = caps.zoom.max;
+    zoomEl.step = caps.zoom.step || 0.1;
+
+    // Default zoom: 1.5x (or max if device tops out lower) — fills frame for small QR
+    const target = Math.min(caps.zoom.max, Math.max(caps.zoom.min || 1, 1.5));
+    zoomEl.value = target;
+    zoomVal.textContent = target.toFixed(1) + '×';
+    try { await camTrack.applyConstraints({ advanced: [{ zoom: target }] }); } catch(e){}
+
+    zoomEl.oninput = async () => {
+      const v = parseFloat(zoomEl.value);
+      zoomVal.textContent = v.toFixed(1) + '×';
+      try { await camTrack.applyConstraints({ advanced: [{ zoom: v }] }); } catch(e){}
+    };
+    wrap.classList.remove('hidden');
+    anyTool = true;
+  }
+
+  // TORCH — small QR + dim warehouse light = bad combo. Light helps a lot.
+  if (caps.torch) {
+    const torchBtn = document.getElementById('btn-torch');
+    torchBtn.classList.remove('hidden');
+    torchOn = false;
+    torchBtn.onclick = async () => {
+      torchOn = !torchOn;
+      try {
+        await camTrack.applyConstraints({ advanced: [{ torch: torchOn }] });
+        torchBtn.setAttribute('aria-pressed', String(torchOn));
+        if (torchOn) { torchBtn.classList.add('bg-ink','text-cream','border-ink'); }
+        else         { torchBtn.classList.remove('bg-ink','text-cream','border-ink'); }
+      } catch (e) { toast('Torch unavailable', 'warn'); }
+    };
+    anyTool = true;
+  }
+
+  if (anyTool) tools.classList.remove('hidden');
+}
+
 document.getElementById('btn-stop-scan').onclick = stopScanner;
 async function stopScanner() {
   if (!qrInstance || !qrRunning) { resetScannerUI(); return; }
+  // Try to turn torch off before stopping
+  if (camTrack && torchOn) {
+    try { await camTrack.applyConstraints({ advanced: [{ torch: false }] }); } catch(e){}
+    torchOn = false;
+  }
   try { await qrInstance.stop(); await qrInstance.clear(); } catch(e){}
   qrRunning = false;
+  camTrack = null;
   resetScannerUI();
 }
 function resetScannerUI() {
   document.getElementById('btn-stop-scan').classList.add('hidden');
   document.getElementById('reader-empty').style.display = '';
   const reader = document.getElementById('reader');
-  reader.innerHTML = ''; // clear any leftover dom
+  reader.innerHTML = '';
+  // Hide & reset camera tools
+  const tools = document.getElementById('cam-tools');
+  tools.classList.add('hidden');
+  document.getElementById('zoom-wrap').classList.add('hidden');
+  const torchBtn = document.getElementById('btn-torch');
+  torchBtn.classList.add('hidden');
+  torchBtn.classList.remove('bg-ink','text-cream','border-ink');
+  torchBtn.setAttribute('aria-pressed', 'false');
 }
 
 /* ============================================================
@@ -1013,6 +1385,12 @@ document.getElementById('intake-form').addEventListener('submit', async (e) => {
   if (!type)          return toast('Pick a battery type', 'warn');
   if (!party)         return toast('Pick a party', 'warn');
   if (!driver)        return toast('Pick or type a driver', 'warn');
+
+  // If they typed a fresh driver name and skipped the Add button,
+  // still persist it so it shows up as a chip next time.
+  if (driverOther && !selectedDriver) {
+    addCustomOption('driver', driverOther);
+  }
 
   const btn = document.getElementById('btn-submit');
   const lbl = document.getElementById('btn-submit-label');
@@ -1122,9 +1500,11 @@ async function runLookup() {
 
   if (!rows.length) {
     host.innerHTML = `
-      <div class="rounded-xl border border-cream-deep bg-cream-dark/30 p-6 text-center">
-        <div class="text-[13px] text-ink-mute">No match for <span class="font-mono text-ink">${escapeHtml(q)}</span></div>
+      <div class="rounded-xl border border-cream-deep bg-cream-dark/30 p-6">
+        <div class="text-[13px] text-ink-mute text-center">No intake record for <span class="font-mono text-ink">${escapeHtml(q)}</span></div>
+        <div id="w-verify-nomatch" class="mt-4 pt-4 border-t border-cream-deep/60"></div>
       </div>`;
+    runVerifyInto('w-verify-nomatch', q);
     return;
   }
 
@@ -1175,6 +1555,7 @@ async function runLookup() {
           <div class="text-[12px] font-mono mt-1 text-ink-mute break-all">${escapeHtml(r.raw_qr)}</div>
         </div>` : ''}
       </div>
+      <div id="w-verify" class="mt-5 pt-4 border-t border-lav-100"></div>
     </div>
     ${others.length ? `
     <div class="mt-5">
@@ -1193,6 +1574,8 @@ async function runLookup() {
       </div>
     </div>` : ''}
   `;
+  // Run Yantrayug verification on the matched serial (uses the actual stored value, not the search query)
+  runVerifyInto('w-verify', r.serial_number);
 }
 
 async function refreshWarrantyTable() {
@@ -1385,6 +1768,11 @@ document.getElementById('edit-save').onclick = async (e) => {
   if (!party)  return toast('Pick a party', 'warn');
   if (!driver) return toast('Driver required', 'warn');
 
+  // If a brand-new driver name was typed in, persist it for future
+  if (!DRIVERS.some(d => d.toLowerCase() === driver.toLowerCase())) {
+    addCustomOption('driver', driver);
+  }
+
   const btn = document.getElementById('edit-save');
   const lbl = document.getElementById('edit-save-label');
   btn.disabled = true; lbl.textContent = 'Saving…';
@@ -1424,10 +1812,14 @@ document.addEventListener('click', e => {
  * ============================================================ */
 (async function init() {
   await checkConn();
+  // Pull custom parties / battery types / drivers added via the UI before
+  await mergeCustomOptions();
   await Promise.all([loadFeed(), bumpStats()]);
   // refresh feed every 20s for live feel
   setInterval(() => { if (document.getElementById('view-intake').classList.contains('is-active')) loadFeed(); }, 20000);
   setInterval(bumpStats, 30000);
+  // re-pull options every 2 minutes so additions made on another device show up
+  setInterval(mergeCustomOptions, 120000);
 })();
 
 </script>
