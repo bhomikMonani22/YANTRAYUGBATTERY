@@ -689,7 +689,7 @@ const YANTRAYUG_TABLE = 'yantrayug_batteries';   // optional, populated by impor
 
 // Default seed drivers — additions persist in Supabase via battery_intake_options
 let DRIVERS = [
-  'Kapre', 'Sutkar', 'Sahil', 'Gore', 'Rauff', 'Shekar'
+  'KAPRE', 'SUTKAR', 'SAHIL', 'RAUFF', 'GORE', 'SHEKAR'
 ];
 
 const supa = window.supabase.createClient(SUPA_URL, SUPA_ANON);
@@ -1104,10 +1104,13 @@ function bindDD(scope, kind, onPick) {
   scope.dataset.kind = kind;
   scope._ddOnPick = onPick || null;
   const trig = scope.querySelector('.dd-trigger');
-  const lbl  = scope.querySelector('.dd-label');
   // Replace any existing handler by cloning the node — keeps re-binds idempotent
   const fresh = trig.cloneNode(true);
   trig.parentNode.replaceChild(fresh, trig);
+  // CRITICAL: query the label from the NEW trigger after the swap.
+  // The pre-swap reference points to a detached node, so writes to it
+  // would never reach the screen.
+  const lbl = fresh.querySelector('.dd-label');
   fresh.addEventListener('click', () => {
     openDD(fresh, scope.dataset.kind, scope.dataset.value || null, val => {
       scope.dataset.value = val;
