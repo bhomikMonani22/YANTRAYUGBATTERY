@@ -689,7 +689,7 @@ const YANTRAYUG_TABLE = 'yantrayug_batteries';   // optional, populated by impor
 
 // Default seed drivers — additions persist in Supabase via battery_intake_options
 let DRIVERS = [
-  'KAPRE', 'SUTKAR', 'SAHIL', 'RAUFF', 'GORE', 'SHEKAR'
+  'Abjit', 'Ramesh', 'Sandip', 'Ganesh', 'Vikas', 'Rahul'
 ];
 
 const supa = window.supabase.createClient(SUPA_URL, SUPA_ANON);
@@ -765,31 +765,48 @@ async function addCustomOption(kind, rawName) {
 
 /* ============================================================
  *  QR PARSER
+ *  Exide serial = 11 alphanumeric characters, always.
  *  Long format example:
  *    "fxl5-xltz4a m7d6y110247 0212 7d62 a3 110426 13.02v"
- *    -> serial = token2 + token4 = "m7d6y1102477d62"
- *    -> battery_type = part after "-" in token1 -> "XLTZ4A"
- *  Short format:
- *    "m7d6y1102477d62" -> just the serial; type unknown.
+ *      token[0]   token[1]    [2]  [3]  [4]  [5]    [6]
+ *      battery     serial            batch    date  voltage
+ *      type code   (11 chars)        code
+ *    -> serial = token[1] = "m7d6y110247"
+ *    -> battery_type = part after "-" in token[0] -> "XLTZ4A"
+ *  Short format (single token):
+ *    Some scans produce just the serial (11 chars). Older QRs may
+ *    bake extra digits in -> we slice to the first 11 alphanumerics.
  * ============================================================ */
+const EXIDE_SERIAL_LEN = 11;
+
+function normalizeSerial(s) {
+  if (!s) return '';
+  // Keep only alphanumeric, lowercase, then take first 11.
+  const clean = s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return clean.slice(0, EXIDE_SERIAL_LEN);
+}
+
 function parseExideQR(raw) {
   if (!raw) return { serial: '', type: null, format: 'empty', raw: '' };
   const cleaned = raw.toLowerCase().trim();
   const tokens = cleaned.split(/\s+/).filter(Boolean);
 
-  // Long format heuristic: 4+ space-separated tokens
-  if (tokens.length >= 4) {
+  if (tokens.length >= 2) {
+    // Long format: token[0] = type code (e.g. fxl5-xltz4a), token[1] = serial
     let type = null;
     if (tokens[0].includes('-')) {
       const after = tokens[0].split('-').slice(1).join('-');
       if (after) type = after.toUpperCase();
     }
-    const serial = (tokens[1] || '') + (tokens[3] || '');
-    return { serial: serial.toLowerCase(), type, format: 'long', raw };
+    const serial = normalizeSerial(tokens[1]);
+    if (serial.length === EXIDE_SERIAL_LEN) {
+      return { serial, type, format: 'long', raw };
+    }
+    // Fall through if token[1] didn't look right
   }
 
-  // Single token / short
-  return { serial: tokens.join(''), type: null, format: 'short', raw };
+  // Short / single-token: trim to first 11 alphanumeric chars
+  return { serial: normalizeSerial(tokens.join('')), type: null, format: 'short', raw };
 }
 
 /* ============================================================
