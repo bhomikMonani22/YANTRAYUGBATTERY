@@ -506,14 +506,23 @@
     <div class="bg-white rounded-2xl border border-cream-deep/70 shadow-card overflow-hidden">
       <div class="px-5 sm:px-8 py-6 border-b border-cream-deep/60">
         <h2 class="text-[22px] font-semibold tracking-tight">Warranty lookup</h2>
-        <p class="text-[13px] text-ink-mute mt-1">Type any part of the serial. Hit enter for exact, partials show fuzzy results.</p>
+        <p class="text-[13px] text-ink-mute mt-1">Search by serial, party, or driver. One match → full detail. Many matches → table view.</p>
       </div>
 
       <div class="p-5 sm:p-8">
         <div class="relative">
           <svg class="w-5 h-5 text-ink-mute absolute left-4 top-1/2 -translate-y-1/2" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="9" cy="9" r="6"/><path d="M14 14l4 4"/></svg>
-          <input id="w-search" type="text" placeholder="Serial number, e.g. m7d6y1102477d62"
-            class="w-full pl-11 pr-4 py-4 rounded-xl border border-cream-deep bg-cream/40 focus:bg-white focus:border-ink-soft focus:outline-none transition text-[15px] font-mono" />
+          <input id="w-search" type="text" placeholder="Serial, party name, or driver name…" autocomplete="off"
+            class="w-full pl-11 pr-4 py-4 rounded-xl border border-cream-deep bg-cream/40 focus:bg-white focus:border-ink-soft focus:outline-none transition text-[15px]" />
+        </div>
+
+        <!-- Scope chips -->
+        <div class="mt-3 flex flex-wrap items-center gap-1.5">
+          <span class="text-[11px] uppercase tracking-wider text-ink-mute font-medium mr-1.5">Search in</span>
+          <button type="button" data-scope="any"    class="scope-chip px-3 py-1.5 rounded-full border text-[12.5px] font-medium transition bg-ink text-cream border-ink">Any</button>
+          <button type="button" data-scope="serial" class="scope-chip px-3 py-1.5 rounded-full border text-[12.5px] font-medium transition bg-cream/50 text-ink border-cream-deep hover:bg-cream-dark">Serial</button>
+          <button type="button" data-scope="party"  class="scope-chip px-3 py-1.5 rounded-full border text-[12.5px] font-medium transition bg-cream/50 text-ink border-cream-deep hover:bg-cream-dark">Party</button>
+          <button type="button" data-scope="driver" class="scope-chip px-3 py-1.5 rounded-full border text-[12.5px] font-medium transition bg-cream/50 text-ink border-cream-deep hover:bg-cream-dark">Driver</button>
         </div>
 
         <div id="w-result" class="mt-6"></div>
@@ -689,7 +698,7 @@ const YANTRAYUG_TABLE = 'yantrayug_batteries';   // optional, populated by impor
 
 // Default seed drivers — additions persist in Supabase via battery_intake_options
 let DRIVERS = [
-  'Sutkar', 'Kapre', 'Sahil', 'Rauff', 'Shekar', 'Sudhir'
+  'Abjit', 'Ramesh', 'Sandip', 'Ganesh', 'Vikas', 'Rahul'
 ];
 
 const supa = window.supabase.createClient(SUPA_URL, SUPA_ANON);
@@ -1492,110 +1501,234 @@ async function loadFeed(highlightId=null) {
 
 /* ============================================================
  *  WARRANTY LOOKUP
+ *  Search by serial, party, or driver. "Any" OR-searches all
+ *  three; specific scopes restrict to one column. Single-result
+ *  renders as the full detail card; multi-result as a summary
+ *  header + compact table.
  * ============================================================ */
 const wInput = document.getElementById('w-search');
 let wTimer = null;
+let wScope = 'any';   // 'any' | 'serial' | 'party' | 'driver'
+
 wInput.addEventListener('input', () => {
   clearTimeout(wTimer); wTimer = setTimeout(runLookup, 250);
 });
 wInput.addEventListener('keydown', e => { if (e.key==='Enter') { clearTimeout(wTimer); runLookup(); }});
 
+// Scope chip clicks
+document.querySelectorAll('.scope-chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    wScope = chip.dataset.scope;
+    document.querySelectorAll('.scope-chip').forEach(c => {
+      if (c.dataset.scope === wScope) {
+        c.classList.add('bg-ink','text-cream','border-ink');
+        c.classList.remove('bg-cream/50','text-ink','border-cream-deep','hover:bg-cream-dark');
+      } else {
+        c.classList.remove('bg-ink','text-cream','border-ink');
+        c.classList.add('bg-cream/50','text-ink','border-cream-deep','hover:bg-cream-dark');
+      }
+    });
+    if (wInput.value.trim()) runLookup();
+  });
+});
+
+// Sanitize for Supabase .or() syntax — commas/parens are reserved separators
+function sanitizeForOr(s) {
+  return (s || '').replace(/[,()]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 async function runLookup() {
-  const q = wInput.value.trim().toLowerCase();
+  const raw = wInput.value.trim();
   const host = document.getElementById('w-result');
-  if (!q) { host.innerHTML = ''; return; }
+  if (!raw || raw.length < 2) { host.innerHTML = ''; return; }
 
-  // Try exact first
-  const exact = await supa.from(TABLE).select('*')
-    .eq('serial_number', q).order('created_at',{ascending:false});
-  let rows = (exact.data || []);
+  const safe = sanitizeForOr(raw);
+  const qLower = safe.toLowerCase();
+  let rows = [];
+  let err = null;
 
-  // Fall back to fuzzy ilike
-  if (rows.length === 0) {
-    const fuzzy = await supa.from(TABLE).select('*')
-      .ilike('serial_number', '%'+q+'%')
-      .order('created_at',{ascending:false}).limit(20);
-    rows = fuzzy.data || [];
+  if (wScope === 'serial') {
+    // Exact serial first, fuzzy fallback
+    const exact = await supa.from(TABLE).select('*')
+      .eq('serial_number', qLower).order('created_at',{ascending:false});
+    rows = exact.data || [];
+    if (!rows.length) {
+      const fuzzy = await supa.from(TABLE).select('*')
+        .ilike('serial_number', '%'+safe+'%')
+        .order('created_at',{ascending:false}).limit(200);
+      rows = fuzzy.data || []; err = fuzzy.error;
+    }
+  } else if (wScope === 'party') {
+    const res = await supa.from(TABLE).select('*')
+      .ilike('party_name', '%'+safe+'%')
+      .order('created_at',{ascending:false}).limit(500);
+    rows = res.data || []; err = res.error;
+  } else if (wScope === 'driver') {
+    const res = await supa.from(TABLE).select('*')
+      .ilike('driver_name', '%'+safe+'%')
+      .order('created_at',{ascending:false}).limit(500);
+    rows = res.data || []; err = res.error;
+  } else {
+    // ANY — OR across all three columns
+    const orFilter = [
+      `serial_number.ilike.%${safe}%`,
+      `party_name.ilike.%${safe}%`,
+      `driver_name.ilike.%${safe}%`,
+    ].join(',');
+    const res = await supa.from(TABLE).select('*').or(orFilter)
+      .order('created_at',{ascending:false}).limit(500);
+    rows = res.data || []; err = res.error;
   }
+
+  if (err) {
+    host.innerHTML = `<div class="text-[13px] text-ink-mute">Search error: ${escapeHtml(err.message)}</div>`;
+    return;
+  }
+  renderLookupResults(rows, safe);
+}
+
+function renderLookupResults(rows, q) {
+  const host = document.getElementById('w-result');
 
   if (!rows.length) {
     host.innerHTML = `
       <div class="rounded-xl border border-cream-deep bg-cream-dark/30 p-6">
-        <div class="text-[13px] text-ink-mute text-center">No intake record for <span class="font-mono text-ink">${escapeHtml(q)}</span></div>
+        <div class="text-[13px] text-ink-mute text-center">No match for <span class="font-mono text-ink">${escapeHtml(q)}</span></div>
         <div id="w-verify-nomatch" class="mt-4 pt-4 border-t border-cream-deep/60"></div>
       </div>`;
     runVerifyInto('w-verify-nomatch', q);
     return;
   }
 
-  // Primary card = first (most recent) match
-  const r = rows[0];
-  const others = rows.slice(1);
+  // Single result → full detail card (verification chip too)
+  if (rows.length === 1) {
+    const r = rows[0];
+    host.innerHTML = `
+      <div class="rounded-2xl border border-lav-100 bg-gradient-to-br from-lav-50 to-white p-6">
+        <div class="flex items-center gap-2 mb-4">
+          <span class="w-1.5 h-1.5 rounded-full bg-mint-500 live-dot"></span>
+          <span class="text-[11px] font-semibold text-lav-700 uppercase tracking-wider">Match found</span>
+          <button data-edit-id="${escapeHtml(r.id)}" class="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white border border-lav-100 hover:bg-lav-50 transition text-[12px] font-medium text-ink-soft">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 3l3 3-9 9H5v-3l9-9zM12 5l3 3"/></svg>
+            Edit
+          </button>
+        </div>
+        <div class="grid sm:grid-cols-2 gap-x-8 gap-y-5">
+          <div>
+            <div class="text-[10.5px] uppercase tracking-wider text-ink-mute">Serial</div>
+            <div class="text-[16px] font-mono mt-1 break-all">${escapeHtml(r.serial_number)}</div>
+          </div>
+          <div>
+            <div class="text-[10.5px] uppercase tracking-wider text-ink-mute">Battery type</div>
+            <div class="text-[16px] font-medium mt-1">${escapeHtml(r.battery_type)}</div>
+          </div>
+          <div>
+            <div class="text-[10.5px] uppercase tracking-wider text-ink-mute">Party</div>
+            <div class="text-[16px] font-medium mt-1">${escapeHtml(r.party_name)}</div>
+          </div>
+          <div>
+            <div class="text-[10.5px] uppercase tracking-wider text-ink-mute">Driver</div>
+            <div class="text-[16px] font-medium mt-1">
+              <span class="inline-block px-2.5 py-0.5 bg-white rounded-full border border-lav-100 text-[14px]">${escapeHtml(r.driver_name)}</span>
+            </div>
+          </div>
+          <div class="sm:col-span-2 pt-4 border-t border-lav-100">
+            <div class="text-[10.5px] uppercase tracking-wider text-ink-mute">Scanned at</div>
+            <div class="text-[14px] mt-1">${escapeHtml(fmtFull(r.created_at))} <span class="text-ink-mute text-[12px]">· ${escapeHtml(timeAgo(r.created_at))}</span></div>
+          </div>
+          ${r.notes ? `
+          <div class="sm:col-span-2 pt-4 border-t border-lav-100">
+            <div class="text-[10.5px] uppercase tracking-wider text-ink-mute">Notes</div>
+            <div class="text-[13.5px] mt-1 text-ink-soft">${escapeHtml(r.notes)}</div>
+          </div>` : ''}
+          ${r.raw_qr ? `
+          <div class="sm:col-span-2">
+            <div class="text-[10.5px] uppercase tracking-wider text-ink-mute">Raw QR</div>
+            <div class="text-[12px] font-mono mt-1 text-ink-mute break-all">${escapeHtml(r.raw_qr)}</div>
+          </div>` : ''}
+        </div>
+        <div id="w-verify" class="mt-5 pt-4 border-t border-lav-100"></div>
+      </div>`;
+    runVerifyInto('w-verify', r.serial_number);
+    return;
+  }
+
+  // Multi-result → summary header + compact table
+  const partyCount = {}, driverCount = {}, typeCount = {};
+  rows.forEach(r => {
+    partyCount[r.party_name]   = (partyCount[r.party_name]   || 0) + 1;
+    driverCount[r.driver_name] = (driverCount[r.driver_name] || 0) + 1;
+    typeCount[r.battery_type]  = (typeCount[r.battery_type]  || 0) + 1;
+  });
+  const topEntry = (obj) => Object.entries(obj).sort((a,b)=>b[1]-a[1])[0];
+  const tParty  = topEntry(partyCount);
+  const tDriver = topEntry(driverCount);
+  const tType   = topEntry(typeCount);
+  const first   = rows[rows.length - 1].created_at;
+  const last    = rows[0].created_at;
+
+  const uniqParties  = Object.keys(partyCount).length;
+  const uniqDrivers  = Object.keys(driverCount).length;
+
   host.innerHTML = `
-    <div class="rounded-2xl border border-lav-100 bg-gradient-to-br from-lav-50 to-white p-6">
+    <div class="rounded-2xl border border-lav-100 bg-gradient-to-br from-lav-50 to-white p-5 sm:p-6 mb-4">
       <div class="flex items-center gap-2 mb-4">
         <span class="w-1.5 h-1.5 rounded-full bg-mint-500 live-dot"></span>
-        <span class="text-[11px] font-semibold text-lav-700 uppercase tracking-wider">Match found</span>
-        <button data-edit-id="${escapeHtml(r.id)}" class="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white border border-lav-100 hover:bg-lav-50 transition text-[12px] font-medium text-ink-soft">
-          <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 3l3 3-9 9H5v-3l9-9zM12 5l3 3"/></svg>
-          Edit
-        </button>
+        <span class="text-[11px] font-semibold text-lav-700 uppercase tracking-wider">${rows.length} matches</span>
+        <span class="ml-auto text-[11px] text-ink-mute">${escapeHtml(timeAgo(first))} → ${escapeHtml(timeAgo(last))}</span>
       </div>
-      <div class="grid sm:grid-cols-2 gap-x-8 gap-y-5">
+      <div class="grid sm:grid-cols-3 gap-4">
         <div>
-          <div class="text-[10.5px] uppercase tracking-wider text-ink-mute">Serial</div>
-          <div class="text-[16px] font-mono mt-1 break-all">${escapeHtml(r.serial_number)}</div>
-        </div>
-        <div>
-          <div class="text-[10.5px] uppercase tracking-wider text-ink-mute">Battery type</div>
-          <div class="text-[16px] font-medium mt-1">${escapeHtml(r.battery_type)}</div>
+          <div class="text-[10.5px] uppercase tracking-wider text-ink-mute">Top party${uniqParties > 1 ? ` · ${uniqParties} total` : ''}</div>
+          <div class="text-[13.5px] font-medium mt-1 truncate">${escapeHtml(tParty[0])}</div>
+          <div class="text-[11px] text-ink-mute mt-0.5">${tParty[1]} batter${tParty[1]===1?'y':'ies'}</div>
         </div>
         <div>
-          <div class="text-[10.5px] uppercase tracking-wider text-ink-mute">Party</div>
-          <div class="text-[16px] font-medium mt-1">${escapeHtml(r.party_name)}</div>
+          <div class="text-[10.5px] uppercase tracking-wider text-ink-mute">Top driver${uniqDrivers > 1 ? ` · ${uniqDrivers} total` : ''}</div>
+          <div class="text-[13.5px] font-medium mt-1 truncate">${escapeHtml(tDriver[0])}</div>
+          <div class="text-[11px] text-ink-mute mt-0.5">${tDriver[1]} batter${tDriver[1]===1?'y':'ies'}</div>
         </div>
         <div>
-          <div class="text-[10.5px] uppercase tracking-wider text-ink-mute">Driver</div>
-          <div class="text-[16px] font-medium mt-1">
-            <span class="inline-block px-2.5 py-0.5 bg-white rounded-full border border-lav-100 text-[14px]">${escapeHtml(r.driver_name)}</span>
-          </div>
+          <div class="text-[10.5px] uppercase tracking-wider text-ink-mute">Top type</div>
+          <div class="text-[13.5px] font-medium mt-1 truncate">${escapeHtml(tType[0])}</div>
+          <div class="text-[11px] text-ink-mute mt-0.5">${tType[1]} batter${tType[1]===1?'y':'ies'}</div>
         </div>
-        <div class="sm:col-span-2 pt-4 border-t border-lav-100">
-          <div class="text-[10.5px] uppercase tracking-wider text-ink-mute">Scanned at</div>
-          <div class="text-[14px] mt-1">${escapeHtml(fmtFull(r.created_at))} <span class="text-ink-mute text-[12px]">· ${escapeHtml(timeAgo(r.created_at))}</span></div>
-        </div>
-        ${r.notes ? `
-        <div class="sm:col-span-2 pt-4 border-t border-lav-100">
-          <div class="text-[10.5px] uppercase tracking-wider text-ink-mute">Notes</div>
-          <div class="text-[13.5px] mt-1 text-ink-soft">${escapeHtml(r.notes)}</div>
-        </div>` : ''}
-        ${r.raw_qr ? `
-        <div class="sm:col-span-2">
-          <div class="text-[10.5px] uppercase tracking-wider text-ink-mute">Raw QR</div>
-          <div class="text-[12px] font-mono mt-1 text-ink-mute break-all">${escapeHtml(r.raw_qr)}</div>
-        </div>` : ''}
       </div>
-      <div id="w-verify" class="mt-5 pt-4 border-t border-lav-100"></div>
     </div>
-    ${others.length ? `
-    <div class="mt-5">
-      <div class="text-[11px] uppercase tracking-wider text-ink-mute mb-2">Also matched (${others.length})</div>
-      <div class="space-y-2">
-        ${others.map(o => `
-          <div class="rounded-lg border border-cream-deep bg-white p-3 text-[13px] flex flex-wrap items-center gap-x-4 gap-y-1">
-            <span class="font-mono text-[12.5px]">${escapeHtml(o.serial_number)}</span>
-            <span class="text-ink-mute">${escapeHtml(o.battery_type)}</span>
-            <span class="ml-auto text-ink-mute">${escapeHtml(o.driver_name)} · ${escapeHtml(timeAgo(o.created_at))}</span>
-            <button data-edit-id="${escapeHtml(o.id)}" class="p-1.5 rounded-md hover:bg-cream-dark text-ink-mute hover:text-ink transition" aria-label="Edit">
-              <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 3l3 3-9 9H5v-3l9-9zM12 5l3 3"/></svg>
-            </button>
-          </div>
-        `).join('')}
+
+    <div class="rounded-2xl border border-cream-deep/70 bg-white shadow-card overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-[13px]">
+          <thead class="bg-cream-dark/50 text-ink-mute text-[11px] uppercase tracking-wider">
+            <tr>
+              <th class="text-left px-4 sm:px-6 py-3 font-medium">Serial</th>
+              <th class="text-left px-3 py-3 font-medium">Type</th>
+              <th class="text-left px-3 py-3 font-medium">Party</th>
+              <th class="text-left px-3 py-3 font-medium">Driver</th>
+              <th class="text-left px-3 py-3 font-medium whitespace-nowrap">When</th>
+              <th class="text-right px-3 sm:px-6 py-3 font-medium"></th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-cream-deep/40">
+            ${rows.map(r => `
+              <tr class="hover:bg-cream-dark/30 transition">
+                <td class="px-4 sm:px-6 py-3 font-mono text-[12.5px] truncate max-w-[180px]">${escapeHtml(r.serial_number)}</td>
+                <td class="px-3 py-3 whitespace-nowrap">${escapeHtml(r.battery_type)}</td>
+                <td class="px-3 py-3 truncate max-w-[240px]">${escapeHtml(r.party_name)}</td>
+                <td class="px-3 py-3"><span class="inline-block px-2 py-0.5 bg-lav-50 text-lav-700 rounded-full text-[11.5px] whitespace-nowrap">${escapeHtml(r.driver_name)}</span></td>
+                <td class="px-3 py-3 text-ink-mute whitespace-nowrap text-[12.5px]">${escapeHtml(timeAgo(r.created_at))}</td>
+                <td class="px-3 sm:px-6 py-3 text-right">
+                  <button data-edit-id="${escapeHtml(r.id)}" class="p-1.5 rounded-md hover:bg-cream-dark text-ink-mute hover:text-ink transition" aria-label="Edit">
+                    <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 3l3 3-9 9H5v-3l9-9zM12 5l3 3"/></svg>
+                  </button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
       </div>
-    </div>` : ''}
+    </div>
   `;
-  // Run Yantrayug verification on the matched serial (uses the actual stored value, not the search query)
-  runVerifyInto('w-verify', r.serial_number);
 }
 
 async function refreshWarrantyTable() {
