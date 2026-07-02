@@ -416,6 +416,9 @@
             <!-- Yantrayug verification slot -->
             <div id="parsed-verify" class="mt-3 pt-3 border-t border-lav-100"></div>
           </div>
+
+          <!-- Duplicate-scan warning (shown when serial was logged in the last 3 days) -->
+          <div id="dup-warning" class="hidden mt-5"></div>
         </div>
       </div>
 
@@ -986,6 +989,119 @@ async function runVerifyInto(hostId, serial) {
 }
 
 /* ============================================================
+ *  DUPLICATE-SCAN GUARD
+ *  A battery legitimately re-comes for warranty months later, so
+ *  duplicates are only flagged when the previous scan was within
+ *  the last DUP_WINDOW_DAYS. The manager can override if the
+ *  situation actually warrants a re-log inside the window.
+ * ============================================================ */
+const DUP_WINDOW_DAYS = 3;
+let dupOverride = false;        // per-serial override flag; reset on any new serial
+let dupOverrideSerial = null;
+let dupCurrent = null;          // last duplicate result, for use by submit handler
+let dupCheckToken = 0;          // ignore stale async responses
+
+async function checkDuplicate(serial) {
+  const token = ++dupCheckToken;
+  const host = document.getElementById('dup-warning');
+  if (!serial || serial.length < 6) { hideDupWarning(); return; }
+
+  // Reset override when serial changes
+  if (dupOverrideSerial !== serial) { dupOverride = false; dupOverrideSerial = null; }
+
+  const cutoffISO = new Date(Date.now() - DUP_WINDOW_DAYS * 24 * 3600 * 1000).toISOString();
+  const { data, error } = await supa.from(TABLE)
+    .select('id, serial_number, battery_type, party_name, driver_name, notes, created_at')
+    .ilike('serial_number', serial)  // case-insensitive to catch legacy mixed-case rows
+    .gte('created_at', cutoffISO)
+    .order('created_at', { ascending: false })
+    .limit(3);
+
+  if (token !== dupCheckToken) return; // a newer check has been fired
+  if (error || !data || !data.length) { dupCurrent = null; hideDupWarning(); return; }
+
+  dupCurrent = { serial, matches: data };
+  renderDupWarning(dupCurrent);
+}
+
+function hideDupWarning() {
+  const host = document.getElementById('dup-warning');
+  host.classList.add('hidden');
+  host.innerHTML = '';
+  dupCurrent = null;
+}
+
+function renderDupWarning({ serial, matches }) {
+  const host = document.getElementById('dup-warning');
+  host.classList.remove('hidden');
+  const primary = matches[0];
+  const others  = matches.slice(1);
+
+  host.innerHTML = `
+    <div class="rounded-xl border-2 border-peach-500 bg-peach-100/70 p-4 sm:p-5">
+      <div class="flex items-start gap-3">
+        <div class="mt-0.5 inline-flex items-center justify-center w-8 h-8 rounded-full bg-peach-500 text-ink flex-shrink-0">
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v5M12 16.5v.5"/><path d="M10.3 3.5L2.5 17a2 2 0 0 0 1.7 3h15.6a2 2 0 0 0 1.7-3L13.7 3.5a2 2 0 0 0-3.4 0z"/></svg>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="text-[13.5px] font-semibold text-ink">Already scanned · within ${DUP_WINDOW_DAYS} days</div>
+          <div class="text-[12.5px] text-ink-soft mt-0.5">This serial was logged <span class="font-medium">${escapeHtml(timeAgo(primary.created_at))}</span> — save is blocked to prevent a double entry.</div>
+
+          <div class="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3 p-3 rounded-lg bg-white/70 border border-peach-300">
+            <div>
+              <div class="text-[10px] uppercase tracking-wider text-ink-mute">Party</div>
+              <div class="text-[12.5px] font-medium mt-0.5 truncate">${escapeHtml(primary.party_name)}</div>
+            </div>
+            <div>
+              <div class="text-[10px] uppercase tracking-wider text-ink-mute">Driver</div>
+              <div class="text-[12.5px] font-medium mt-0.5 truncate">${escapeHtml(primary.driver_name)}</div>
+            </div>
+            <div>
+              <div class="text-[10px] uppercase tracking-wider text-ink-mute">Type</div>
+              <div class="text-[12.5px] font-medium mt-0.5 truncate">${escapeHtml(primary.battery_type)}</div>
+            </div>
+            <div>
+              <div class="text-[10px] uppercase tracking-wider text-ink-mute">When</div>
+              <div class="text-[12.5px] font-medium mt-0.5">${escapeHtml(fmtFull(primary.created_at))}</div>
+            </div>
+          </div>
+
+          ${others.length ? `
+            <div class="mt-2 text-[11.5px] text-ink-mute">
+              +${others.length} more entr${others.length===1?'y':'ies'} for this serial in the last ${DUP_WINDOW_DAYS} days
+            </div>` : ''}
+
+          <div class="mt-4 flex flex-wrap items-center gap-2">
+            <button type="button" data-edit-id="${escapeHtml(primary.id)}"
+              class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-white border border-cream-deep hover:bg-cream-dark transition text-[12.5px] font-medium">
+              <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 3l3 3-9 9H5v-3l9-9zM12 5l3 3"/></svg>
+              Edit the original
+            </button>
+            <button type="button" id="dup-clear"
+              class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-ink text-cream hover:bg-ink-soft transition text-[12.5px] font-medium">
+              Clear &amp; scan another
+            </button>
+            <label class="ml-auto flex items-center gap-2 text-[12px] text-ink-soft cursor-pointer select-none">
+              <input type="checkbox" id="dup-override" ${dupOverride ? 'checked' : ''}
+                class="w-4 h-4 rounded border-cream-deep accent-ink" />
+              <span>Override — log anyway</span>
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+  document.getElementById('dup-clear')?.addEventListener('click', () => {
+    resetForm();
+    hideDupWarning();
+  });
+  document.getElementById('dup-override')?.addEventListener('change', (e) => {
+    dupOverride = e.target.checked;
+    dupOverrideSerial = e.target.checked ? serial : null;
+  });
+}
+
+/* ============================================================
  *  TOAST
  * ============================================================ */
 function toast(msg, kind='ok') {
@@ -1290,6 +1406,8 @@ function applyParse(p) {
 
   // Yantrayug verification — fires asynchronously, doesn't block form
   runVerifyInto('parsed-verify', p.serial);
+  // Duplicate-scan guard — blocks save if same serial logged in last 3 days
+  checkDuplicate(p.serial);
 }
 document.getElementById('btn-parse-manual').onclick = () => {
   const v = document.getElementById('manual-qr').value;
@@ -1300,6 +1418,17 @@ document.getElementById('btn-parse-manual').onclick = () => {
 };
 document.getElementById('manual-qr').addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); document.getElementById('btn-parse-manual').click(); }
+});
+
+// Also check for duplicates when the serial field is edited directly (typed correction, etc.)
+let dupSerialTimer = null;
+document.getElementById('f-serial').addEventListener('input', () => {
+  clearTimeout(dupSerialTimer);
+  dupSerialTimer = setTimeout(() => {
+    const v = document.getElementById('f-serial').value.trim();
+    if (v) checkDuplicate(v);
+    else hideDupWarning();
+  }, 300);
 });
 
 /* ============================================================
@@ -1472,6 +1601,26 @@ document.getElementById('intake-form').addEventListener('submit', async (e) => {
   if (!party)         return toast('Pick a party', 'warn');
   if (!driver)        return toast('Pick or type a driver', 'warn');
 
+  // Fresh duplicate check right before insert — catches the case where the
+  // user changed the serial by hand after the initial async check landed.
+  const cutoffISO = new Date(Date.now() - DUP_WINDOW_DAYS * 24 * 3600 * 1000).toISOString();
+  const dupRes = await supa.from(TABLE)
+    .select('id, created_at, driver_name, party_name')
+    .ilike('serial_number', serial)
+    .gte('created_at', cutoffISO)
+    .order('created_at', { ascending: false })
+    .limit(1);
+  if (!dupRes.error && dupRes.data && dupRes.data.length) {
+    if (!dupOverride || dupOverrideSerial !== serial) {
+      dupCurrent = { serial, matches: dupRes.data };
+      renderDupWarning(dupCurrent);
+      toast('Blocked — already scanned within ' + DUP_WINDOW_DAYS + ' days', 'warn');
+      // Scroll the warning into view so it isn't missed
+      document.getElementById('dup-warning').scrollIntoView({ behavior:'smooth', block:'center' });
+      return;
+    }
+  }
+
   // If they typed a fresh driver name and skipped the Add button,
   // still persist it so it shows up as a chip next time.
   if (driverOther && !selectedDriver) {
@@ -1482,6 +1631,12 @@ document.getElementById('intake-form').addEventListener('submit', async (e) => {
   const lbl = document.getElementById('btn-submit-label');
   btn.disabled = true; lbl.textContent = 'Saving…';
 
+  // If this is an authorised duplicate override, note it in the record for audit.
+  const isOverride = dupOverride && dupOverrideSerial === serial;
+  const finalNotes = isOverride
+    ? `[Re-warranty · override within ${DUP_WINDOW_DAYS}d]` + (notes ? ' ' + notes : '')
+    : notes;
+
   const { data, error } = await supa
     .from(TABLE)
     .insert([{
@@ -1490,7 +1645,7 @@ document.getElementById('intake-form').addEventListener('submit', async (e) => {
       party_name:    party,
       driver_name:   driver,
       raw_qr:        rawQR,
-      notes:         notes,
+      notes:         finalNotes,
     }])
     .select()
     .single();
@@ -1519,6 +1674,9 @@ function resetForm() {
   ddParty.dataset.value=''; ddParty.querySelector('.dd-label').textContent = 'Select party';
   ddParty.querySelector('.dd-label').classList.add('text-ink-mute');
   selectedDriver = null; renderDriverChips();
+  // Clear duplicate state so the next scan starts clean
+  dupOverride = false; dupOverrideSerial = null;
+  hideDupWarning();
 }
 
 /* ============================================================
